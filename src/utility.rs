@@ -213,14 +213,14 @@ impl ViscosityKernel for Point {
     }
 }
 
-pub struct Map2D<T: Coords + Copy> {
+pub struct Map<T: Coords + Copy> {
     pub particles: [Particle<T>; 500],
     pub dim: T,
     pub radius: f64,
     pub particle_map: HashMap<T::Key, Vec<Particle<T>>>,
 }
 
-impl<T> Map2D<T>
+impl<T> Map<T>
 where
     T: Copy + Coords + Poly6Kernel + SpikyKernel + ViscosityKernel + std::ops::Mul<f64>,
     T::Key: Hash + Eq,
