@@ -1,30 +1,5 @@
-use std::{cmp::Eq, collections::HashMap, f64::consts::PI, hash::Hash};
+use std::f64::consts::PI;
 
-#[derive(Default, Debug, PartialEq, Clone, Copy)]
-pub struct Particle<T: Copy> {
-    position: T,
-    velocity: T,
-    density: f64,
-    temperature: f64,
-    properties: ParticleProperties,
-}
-
-#[derive(Default, Debug, PartialEq, Clone, Copy)]
-pub struct ParticleProperties {
-    /// Dynamic viscosity
-    viscosity: f64,
-    /// thermal conductivity divided by specific heat, no density yet
-    diffusivity: f64,
-    surface_tension: f64,
-    thermal_expansion: f64,
-}
-
-impl ParticleProperties {
-    // /// 5% salt water
-    // fn salt_water() -> Self {
-    //     Self {viscosity: , diffusivity}
-    // }
-}
 /// Kernel for general smoothing, h is the radius of the support
 pub trait Poly6Kernel {
     fn poly6(&self, h: f64, point: Self) -> f64;
@@ -43,7 +18,34 @@ pub trait ViscosityKernel {
     fn grad_visc(&self, h: f64, point: Self) -> Self;
     fn laplace_visc(&self, h: f64, point: Self) -> f64;
 }
+#[derive(Default, Debug, PartialEq, Clone, Copy)]
+pub struct Particle<T: Copy> {
+    pub position: T,
+    pub velocity: T,
+    pub density: f64,
+    pub temperature: f64,
+    pub properties: ParticleProperties,
+}
 
+impl<T: Copy> Particle<T> {
+    pub fn with_density(mut self, density: f64) -> Self {
+        self.density = density;
+        self
+    }
+    pub fn with_velocity(mut self, velocity: T) -> Self {
+        self.velocity = velocity;
+        self
+    }
+    pub fn temperature_density(&self) -> f64 {
+        self.temperature.recip() * self.properties.thermal_expansion
+    }
+    pub fn density_disparity(&self) -> f64 {
+        self.density - self.temperature_density()
+    }
+    pub fn volume(&self) -> f64 {
+        self.properties.mass * self.density.recip()
+    }
+}
 pub trait Coords
 where
     Self: std::marker::Sized,
@@ -51,6 +53,7 @@ where
     type Key;
     fn bin(&self, r: f64) -> Self::Key;
     fn along_axes(&self, r: f64) -> Vec<Self>;
+    fn height(height: f64) -> Self;
 }
 
 #[derive(Default, Debug, PartialEq, Clone, Copy)]
@@ -83,11 +86,15 @@ impl Coords for Point {
     }
     fn along_axes(&self, r: f64) -> Vec<Point> {
         vec![
+            self.clone(),
             self.with_x(self.x + r),
             self.with_x(self.x - r),
             self.with_y(self.y + r),
             self.with_y(self.y - r),
         ]
+    }
+    fn height(height: f64) -> Point {
+        Point::new(0., height)
     }
 }
 
@@ -213,26 +220,21 @@ impl ViscosityKernel for Point {
     }
 }
 
-pub struct Map<T: Coords + Copy> {
-    pub particles: [Particle<T>; 500],
-    pub dim: T,
-    pub radius: f64,
-    pub particle_map: HashMap<T::Key, Vec<Particle<T>>>,
+// unsafe impl Sync for Particle<T> {}
+#[derive(Default, Debug, PartialEq, Clone, Copy)]
+pub struct ParticleProperties {
+    pub mass: f64,
+    /// Dynamic viscosity
+    pub viscosity: f64,
+    /// thermal conductivity divided by specific heat, no density yet
+    pub diffusivity: f64,
+    pub surface_tension: f64,
+    thermal_expansion: f64,
 }
 
-impl<T> Map<T>
-where
-    T: Copy + Coords + Poly6Kernel + SpikyKernel + ViscosityKernel + std::ops::Mul<f64>,
-    T::Key: Hash + Eq,
-{
-    pub fn update_hashmap(&mut self) {
-        self.particle_map.clear();
-        for particle in self.particles.iter() {
-            (*self
-                .particle_map
-                .entry(particle.position.bin(self.radius))
-                .or_insert(Vec::new()))
-            .push(particle.clone());
-        }
-    }
+impl ParticleProperties {
+    // /// 5% salt water
+    // fn salt_water() -> Self {
+    //     Self {viscosity: , diffusivity}
+    // }
 }
