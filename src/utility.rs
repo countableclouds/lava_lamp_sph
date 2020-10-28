@@ -1,4 +1,30 @@
-use std::f64::consts::PI;
+use std::{cmp::Eq, collections::HashMap, f64::consts::PI, hash::Hash};
+
+#[derive(Default, Debug, PartialEq, Clone, Copy)]
+pub struct Particle<T: Copy> {
+    position: T,
+    velocity: T,
+    density: f64,
+    temperature: f64,
+    properties: ParticleProperties,
+}
+
+#[derive(Default, Debug, PartialEq, Clone, Copy)]
+pub struct ParticleProperties {
+    /// Dynamic viscosity
+    viscosity: f64,
+    /// thermal conductivity divided by specific heat, no density yet
+    diffusivity: f64,
+    surface_tension: f64,
+    thermal_expansion: f64,
+}
+
+impl ParticleProperties {
+    // /// 5% salt water
+    // fn salt_water() -> Self {
+    //     Self {viscosity: , diffusivity}
+    // }
+}
 /// Kernel for general smoothing, h is the radius of the support
 pub trait Poly6Kernel {
     fn poly6(&self, h: f64, point: Self) -> f64;
@@ -18,6 +44,15 @@ pub trait ViscosityKernel {
     fn laplace_visc(&self, h: f64, point: Self) -> f64;
 }
 
+pub trait Coords
+where
+    Self: std::marker::Sized,
+{
+    type Key;
+    fn bin(&self, r: f64) -> Self::Key;
+    fn along_axes(&self, r: f64) -> Vec<Self>;
+}
+
 #[derive(Default, Debug, PartialEq, Clone, Copy)]
 pub struct Point {
     pub x: f64,
@@ -32,6 +67,27 @@ impl Point {
     }
     fn mag(&self) -> f64 {
         self.squared_mag().sqrt()
+    }
+    fn with_x(&self, x: f64) -> Point {
+        Point { x, y: self.y }
+    }
+    fn with_y(&self, y: f64) -> Point {
+        Point { x: self.x, y: y }
+    }
+}
+
+impl Coords for Point {
+    type Key = (f64, f64);
+    fn bin(&self, r: f64) -> Self::Key {
+        (self.clone() * r.recip()).into()
+    }
+    fn along_axes(&self, r: f64) -> Vec<Point> {
+        vec![
+            self.with_x(self.x + r),
+            self.with_x(self.x - r),
+            self.with_y(self.y + r),
+            self.with_y(self.y - r),
+        ]
     }
 }
 
@@ -54,6 +110,12 @@ impl std::ops::Sub for Point {
             x: self.x - other.x,
             y: self.y - other.y,
         }
+    }
+}
+
+impl Into<(f64, f64)> for Point {
+    fn into(self) -> (f64, f64) {
+        (self.x, self.y)
     }
 }
 
@@ -151,9 +213,26 @@ impl ViscosityKernel for Point {
     }
 }
 
-pub struct Map2D {
-    dim: Point,
-    points: Vec<Point>,
+pub struct Map2D<T: Coords + Copy> {
+    pub particles: [Particle<T>; 500],
+    pub dim: T,
+    pub radius: f64,
+    pub particle_map: HashMap<T::Key, Vec<Particle<T>>>,
 }
 
-impl Map2D {}
+impl<T> Map2D<T>
+where
+    T: Copy + Coords + Poly6Kernel + SpikyKernel + ViscosityKernel + std::ops::Mul<f64>,
+    T::Key: Hash + Eq,
+{
+    pub fn update_hashmap(&mut self) {
+        self.particle_map.clear();
+        for particle in self.particles.iter() {
+            (*self
+                .particle_map
+                .entry(particle.position.bin(self.radius))
+                .or_insert(Vec::new()))
+            .push(particle.clone());
+        }
+    }
+}
