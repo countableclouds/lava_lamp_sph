@@ -18,13 +18,13 @@ pub trait ViscosityKernel {
     fn grad_visc(&self, h: f64, point: Self) -> Self;
     fn laplace_visc(&self, h: f64, point: Self) -> f64;
 }
-#[derive(Default, Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Particle<T: Copy> {
     pub position: T,
     pub velocity: T,
     pub density: f64,
     pub temperature: f64,
-    pub properties: ParticleProperties,
+    pub properties: Fluid,
 }
 
 impl<T: Copy> Particle<T> {
@@ -32,18 +32,20 @@ impl<T: Copy> Particle<T> {
         self.density = density;
         self
     }
+    pub fn with_temperature(mut self, temperature: f64) -> Self {
+        self.temperature = temperature;
+        self
+    }
     pub fn with_velocity(mut self, velocity: T) -> Self {
         self.velocity = velocity;
         self
     }
-    pub fn temperature_density(&self) -> f64 {
-        self.temperature.recip() * self.properties.thermal_expansion
-    }
+
     pub fn density_disparity(&self) -> f64 {
-        self.density - self.temperature_density()
+        self.density - self.properties.density(self.temperature)
     }
     pub fn volume(&self) -> f64 {
-        self.properties.mass * self.density.recip()
+        self.properties.mass() * self.density.recip()
     }
 }
 pub trait Coords
@@ -219,22 +221,43 @@ impl ViscosityKernel for Point {
         45. * PI.recip() * h.powi(-6) * (h - dist)
     }
 }
-
-// unsafe impl Sync for Particle<T> {}
-#[derive(Default, Debug, PartialEq, Clone, Copy)]
-pub struct ParticleProperties {
-    pub mass: f64,
-    /// Dynamic viscosity
-    pub viscosity: f64,
-    /// thermal conductivity divided by specific heat, no density yet
-    pub diffusivity: f64,
-    pub surface_tension: f64,
-    thermal_expansion: f64,
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Fluid {
+    Saltwater,
+    BenzylAlcohol,
 }
 
-impl ParticleProperties {
-    // /// 5% salt water
-    // fn salt_water() -> Self {
-    //     Self {viscosity: , diffusivity}
-    // }
+impl Fluid {
+    pub fn mass(&self) -> f64 {
+        match self {
+            Fluid::Saltwater => 0.,
+            Fluid::BenzylAlcohol => 0.,
+        }
+    }
+    /// Dynamic viscosity
+    pub fn viscosity(&self) -> f64 {
+        match self {
+            Fluid::Saltwater => 1.12189,
+            Fluid::BenzylAlcohol => 5.7684,
+        }
+    }
+    pub fn diffusivity(&self) -> f64 {
+        match self {
+            Fluid::Saltwater => 0.,
+            Fluid::BenzylAlcohol => 7.201e-4,
+        }
+    }
+    pub fn interfacial_tension(&self) -> f64 {
+        match self {
+            Fluid::Saltwater => 0.5,
+            Fluid::BenzylAlcohol => -0.5,
+        }
+    }
+
+    pub fn density(&self, temperature: f64) -> f64 {
+        match self {
+            Fluid::Saltwater => 0. * (293.15 - temperature) + 0.,
+            Fluid::BenzylAlcohol => 0. * (293.15 - temperature) + 0.,
+        }
+    }
 }

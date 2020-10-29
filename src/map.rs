@@ -45,7 +45,7 @@ where
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
                 for other_particle in particles {
-                    density += other_particle.properties.mass
+                    density += other_particle.properties.mass()
                         * particle
                             .position
                             .poly6(self.radius, other_particle.position);
@@ -57,6 +57,7 @@ where
 
     pub fn update_velocity(&self, particle: &Particle<T>, delta_t: f64) -> Particle<T> {
         let mut acceleration = T::default();
+        let mut temperature = 0.;
 
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
@@ -70,17 +71,26 @@ where
 
                     acceleration += (other_particle.velocity - particle.velocity)
                         * other_particle.volume()
-                        * (other_particle.properties.viscosity + particle.properties.viscosity)
+                        * (other_particle.properties.viscosity() + particle.properties.viscosity())
                         * (particle
                             .position
                             .laplace_visc(self.radius, other_particle.position)
                             / 2.);
+
+                    temperature += (other_particle.temperature - particle.temperature)
+                        * other_particle.volume()
+                        * particle
+                            .position
+                            .laplace_visc(self.radius, other_particle.position);
                 }
             }
         }
         acceleration =
             (acceleration * particle.density.recip() + T::height(-self.gravity)) * delta_t;
-        particle.with_velocity(particle.velocity + acceleration)
+        temperature = particle.temperature + temperature * delta_t;
+        particle
+            .with_velocity(particle.velocity + acceleration)
+            .with_temperature(temperature)
     }
 
     pub fn update(&mut self, delta_t: f64) {
