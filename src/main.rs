@@ -2,5 +2,5 @@ pub mod map;
 pub mod utility;
 
 fn main() {
-    println!("Hello, world!");
+    // let mut lamp_map =
 }

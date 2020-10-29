@@ -4,6 +4,18 @@ const WATER_VISCOSITY: f64 = 1.12189;
 const WATER_DIFFUSIVITY: f64 = 0.;
 const BENZYL_VISCOSITY: f64 = 5.7684;
 const BENZYL_DIFFUSIVITY: f64 = 7.201e-4;
+
+pub trait Coords
+where
+    Self: std::marker::Sized,
+{
+    type Key;
+    fn bin(&self, r: f64) -> Self::Key;
+    fn along_axes(&self, r: f64) -> Vec<Self>;
+    fn height(height: f64) -> Self;
+    fn normalize(self) -> Self;
+    fn control_update(&mut self, velocity: &mut Self, dim: &Self, delta_t: f64);
+}
 /// Kernel for general smoothing, h is the radius of the support
 pub trait Poly6Kernel {
     fn poly6(&self, h: f64, point: Self) -> f64;
@@ -32,7 +44,7 @@ pub struct Particle<T: Copy> {
     pub properties: Fluid,
 }
 
-impl<T: Copy> Particle<T> {
+impl<T: Copy + Coords> Particle<T> {
     pub fn with_density(mut self, density: f64) -> Self {
         self.density = density;
         self
@@ -52,16 +64,11 @@ impl<T: Copy> Particle<T> {
     pub fn volume(&self) -> f64 {
         self.mass * self.density.recip()
     }
-}
-pub trait Coords
-where
-    Self: std::marker::Sized,
-{
-    type Key;
-    fn bin(&self, r: f64) -> Self::Key;
-    fn along_axes(&self, r: f64) -> Vec<Self>;
-    fn height(height: f64) -> Self;
-    fn normalize(self) -> Self;
+    pub fn control_update(mut self, dim: T, delta_t: f64) -> Self {
+        self.position
+            .control_update(&mut self.velocity, &dim, delta_t);
+        self
+    }
 }
 
 #[derive(Default, Debug, PartialEq, Clone, Copy)]
@@ -108,6 +115,23 @@ impl Coords for Point {
     fn normalize(self) -> Self {
         self / self.mag()
     }
+
+    fn control_update(&mut self, velocity: &mut Point, dim: &Self, delta_t: f64) {
+        self.x = self.x + velocity.x * delta_t;
+        self.y = self.y + velocity.y * delta_t;
+        if self.x > dim.x || self.x < 0. {
+            self.x = self.x.min(dim.x).max(0.);
+            velocity.x = -velocity.x;
+        }
+        if self.y > dim.y {
+            self.y = dim.y;
+            velocity.y = -velocity.y;
+        }
+        if self.y < 0. {
+            self.y = 0.;
+            velocity.y = 0.;
+        }
+    }
 }
 
 impl std::ops::Add for Point {
@@ -118,6 +142,13 @@ impl std::ops::Add for Point {
             x: self.x + other.x,
             y: self.y + other.y,
         }
+    }
+}
+
+impl std::ops::AddAssign for Point {
+    fn add_assign(&mut self, other: Point) {
+        self.x += other.x;
+        self.y += other.y;
     }
 }
 

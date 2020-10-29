@@ -103,11 +103,12 @@ where
             * (-Fluid::Saltwater.interfacial_tension(Fluid::BenzylAlcohol)
                 * water_benzyl_curvature);
         acceleration =
-            (acceleration * particle.density.recip() + T::height(-self.gravity)) * delta_t;
+            (acceleration * particle.density.recip() + T::height(self.gravity)) * delta_t;
         temperature = particle.temperature + temperature * delta_t;
         particle
             .with_velocity(particle.velocity + acceleration)
             .with_temperature(temperature)
+            .control_update(self.dim, delta_t)
     }
 
     pub fn update(&mut self, delta_t: f64) {
