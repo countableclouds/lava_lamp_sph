@@ -1,5 +1,9 @@
 use std::f64::consts::PI;
-
+const WATER_BENZYL_TENSION: f64 = 0.;
+const WATER_VISCOSITY: f64 = 1.12189;
+const WATER_DIFFUSIVITY: f64 = 0.;
+const BENZYL_VISCOSITY: f64 = 5.7684;
+const BENZYL_DIFFUSIVITY: f64 = 7.201e-4;
 /// Kernel for general smoothing, h is the radius of the support
 pub trait Poly6Kernel {
     fn poly6(&self, h: f64, point: Self) -> f64;
@@ -23,6 +27,7 @@ pub struct Particle<T: Copy> {
     pub position: T,
     pub velocity: T,
     pub density: f64,
+    pub mass: f64,
     pub temperature: f64,
     pub properties: Fluid,
 }
@@ -45,7 +50,7 @@ impl<T: Copy> Particle<T> {
         self.density - self.properties.density(self.temperature)
     }
     pub fn volume(&self) -> f64 {
-        self.properties.mass() * self.density.recip()
+        self.mass * self.density.recip()
     }
 }
 pub trait Coords
@@ -56,6 +61,7 @@ where
     fn bin(&self, r: f64) -> Self::Key;
     fn along_axes(&self, r: f64) -> Vec<Self>;
     fn height(height: f64) -> Self;
+    fn normalize(self) -> Self;
 }
 
 #[derive(Default, Debug, PartialEq, Clone, Copy)]
@@ -98,6 +104,10 @@ impl Coords for Point {
     fn height(height: f64) -> Point {
         Point::new(0., height)
     }
+
+    fn normalize(self) -> Self {
+        self / self.mag()
+    }
 }
 
 impl std::ops::Add for Point {
@@ -135,6 +145,17 @@ impl std::ops::Mul<f64> for Point {
         Point {
             x: self.x * other,
             y: self.y * other,
+        }
+    }
+}
+
+impl std::ops::Div<f64> for Point {
+    type Output = Point;
+
+    fn div(self, other: f64) -> Point {
+        Point {
+            x: self.x / other,
+            y: self.y / other,
         }
     }
 }
@@ -228,29 +249,42 @@ pub enum Fluid {
 }
 
 impl Fluid {
-    pub fn mass(&self) -> f64 {
-        match self {
-            Fluid::Saltwater => 0.,
-            Fluid::BenzylAlcohol => 0.,
-        }
-    }
     /// Dynamic viscosity
     pub fn viscosity(&self) -> f64 {
         match self {
-            Fluid::Saltwater => 1.12189,
-            Fluid::BenzylAlcohol => 5.7684,
+            Fluid::Saltwater => WATER_VISCOSITY,
+            Fluid::BenzylAlcohol => BENZYL_VISCOSITY,
         }
     }
     pub fn diffusivity(&self) -> f64 {
         match self {
-            Fluid::Saltwater => 0.,
-            Fluid::BenzylAlcohol => 7.201e-4,
+            Fluid::Saltwater => WATER_DIFFUSIVITY,
+            Fluid::BenzylAlcohol => BENZYL_DIFFUSIVITY,
         }
     }
-    pub fn interfacial_tension(&self) -> f64 {
+    pub fn interfacial_tension(&self, fluid: Fluid) -> f64 {
         match self {
-            Fluid::Saltwater => 0.5,
-            Fluid::BenzylAlcohol => -0.5,
+            Fluid::Saltwater => match fluid {
+                Fluid::Saltwater => 0.,
+                Fluid::BenzylAlcohol => WATER_BENZYL_TENSION,
+            },
+            Fluid::BenzylAlcohol => match fluid {
+                Fluid::Saltwater => WATER_BENZYL_TENSION,
+                Fluid::BenzylAlcohol => 0.,
+            },
+        }
+    }
+
+    pub fn color(&self, fluid: Fluid) -> f64 {
+        match self {
+            Fluid::Saltwater => match fluid {
+                Fluid::Saltwater => 0.,
+                Fluid::BenzylAlcohol => 0.5,
+            },
+            Fluid::BenzylAlcohol => match fluid {
+                Fluid::Saltwater => -0.5,
+                Fluid::BenzylAlcohol => 0.,
+            },
         }
     }
 

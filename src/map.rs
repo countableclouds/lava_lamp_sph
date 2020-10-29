@@ -45,7 +45,7 @@ where
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
                 for other_particle in particles {
-                    density += other_particle.properties.mass()
+                    density += other_particle.mass
                         * particle
                             .position
                             .poly6(self.radius, other_particle.position);
@@ -57,6 +57,8 @@ where
 
     pub fn update_velocity(&self, particle: &Particle<T>, delta_t: f64) -> Particle<T> {
         let mut acceleration = T::default();
+        let mut water_benzyl_normal = T::default();
+        let mut water_benzyl_curvature = 0.;
         let mut temperature = 0.;
 
         for point in particle.position.along_axes(self.radius) {
@@ -77,6 +79,18 @@ where
                             .laplace_visc(self.radius, other_particle.position)
                             / 2.);
 
+                    water_benzyl_curvature += other_particle.volume()
+                        * particle.properties.color(other_particle.properties)
+                        * particle
+                            .position
+                            .laplace_poly6(self.radius, other_particle.position);
+
+                    water_benzyl_normal += particle
+                        .position
+                        .grad_poly6(self.radius, other_particle.position)
+                        * (other_particle.volume()
+                            * particle.properties.color(other_particle.properties));
+
                     temperature += (other_particle.temperature - particle.temperature)
                         * other_particle.volume()
                         * particle
@@ -85,6 +99,9 @@ where
                 }
             }
         }
+        acceleration += water_benzyl_normal
+            * (-Fluid::Saltwater.interfacial_tension(Fluid::BenzylAlcohol)
+                * water_benzyl_curvature);
         acceleration =
             (acceleration * particle.density.recip() + T::height(-self.gravity)) * delta_t;
         temperature = particle.temperature + temperature * delta_t;
