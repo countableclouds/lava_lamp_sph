@@ -1,9 +1,9 @@
 use std::f64::consts::PI;
-const WATER_BENZYL_TENSION: f64 = 0.;
+const WATER_BENZYL_TENSION: f64 = 0.03;
 const WATER_VISCOSITY: f64 = 1.12189;
-const WATER_DIFFUSIVITY: f64 = 0.;
+const WATER_DIFFUSIVITY: f64 = 1.69e-7;
 const BENZYL_VISCOSITY: f64 = 5.7684;
-const BENZYL_DIFFUSIVITY: f64 = 7.201e-4;
+const BENZYL_DIFFUSIVITY: f64 = 6.912e-7;
 
 pub trait Coords
 where
@@ -14,7 +14,13 @@ where
     fn along_axes(&self, r: f64) -> Vec<Self>;
     fn height(height: f64) -> Self;
     fn normalize(self) -> Self;
-    fn control_update(&mut self, velocity: &mut Self, dim: &Self, delta_t: f64);
+    fn control_update(
+        &mut self,
+        velocity: &mut Self,
+        temperature: f64,
+        dim: &Self,
+        delta_t: f64,
+    ) -> f64;
 }
 /// Kernel for general smoothing, h is the radius of the support
 pub trait Poly6Kernel {
@@ -44,7 +50,17 @@ pub struct Particle<T: Copy> {
     pub properties: Fluid,
 }
 
-impl<T: Copy + Coords> Particle<T> {
+impl<T: Copy + Coords + Default> Particle<T> {
+    pub fn new(position: T, mass: f64, temperature: f64, properties: Fluid) -> Self {
+        Particle {
+            position,
+            velocity: T::default(),
+            density: 0.,
+            mass,
+            temperature,
+            properties,
+        }
+    }
     pub fn with_density(mut self, density: f64) -> Self {
         self.density = density;
         self
@@ -65,8 +81,9 @@ impl<T: Copy + Coords> Particle<T> {
         self.mass * self.density.recip()
     }
     pub fn control_update(mut self, dim: T, delta_t: f64) -> Self {
-        self.position
-            .control_update(&mut self.velocity, &dim, delta_t);
+        self.temperature =
+            self.position
+                .control_update(&mut self.velocity, self.temperature, &dim, delta_t);
         self
     }
 }
@@ -77,25 +94,28 @@ pub struct Point {
     pub y: f64,
 }
 impl Point {
-    fn new(x: f64, y: f64) -> Point {
+    pub fn new(x: f64, y: f64) -> Point {
         Point { x, y }
     }
-    fn squared_mag(&self) -> f64 {
+    pub fn squared_mag(&self) -> f64 {
         self.x.powi(2) + self.y.powi(2)
     }
-    fn mag(&self) -> f64 {
+    pub fn mag(&self) -> f64 {
         self.squared_mag().sqrt()
     }
-    fn with_x(&self, x: f64) -> Point {
+    pub fn area(&self) -> f64 {
+        self.x * self.y
+    }
+    pub fn with_x(&self, x: f64) -> Point {
         Point { x, y: self.y }
     }
-    fn with_y(&self, y: f64) -> Point {
+    pub fn with_y(&self, y: f64) -> Point {
         Point { x: self.x, y: y }
     }
 }
 
 impl Coords for Point {
-    type Key = (f64, f64);
+    type Key = (u64, u64);
     fn bin(&self, r: f64) -> Self::Key {
         (self.clone() * r.recip()).into()
     }
@@ -116,7 +136,13 @@ impl Coords for Point {
         self / self.mag()
     }
 
-    fn control_update(&mut self, velocity: &mut Point, dim: &Self, delta_t: f64) {
+    fn control_update(
+        &mut self,
+        velocity: &mut Point,
+        temperature: f64,
+        dim: &Self,
+        delta_t: f64,
+    ) -> f64 {
         self.x = self.x + velocity.x * delta_t;
         self.y = self.y + velocity.y * delta_t;
         if self.x > dim.x || self.x < 0. {
@@ -126,11 +152,14 @@ impl Coords for Point {
         if self.y > dim.y {
             self.y = dim.y;
             velocity.y = -velocity.y;
+            return 333.15;
         }
         if self.y < 0. {
             self.y = 0.;
             velocity.y = 0.;
+            return 293.15;
         }
+        temperature
     }
 }
 
@@ -163,9 +192,9 @@ impl std::ops::Sub for Point {
     }
 }
 
-impl Into<(f64, f64)> for Point {
-    fn into(self) -> (f64, f64) {
-        (self.x, self.y)
+impl Into<(u64, u64)> for Point {
+    fn into(self) -> (u64, u64) {
+        (self.x as u64, self.y as u64)
     }
 }
 
@@ -321,8 +350,8 @@ impl Fluid {
 
     pub fn density(&self, temperature: f64) -> f64 {
         match self {
-            Fluid::Saltwater => 0. * (293.15 - temperature) + 0.,
-            Fluid::BenzylAlcohol => 0. * (293.15 - temperature) + 0.,
+            Fluid::Saltwater => 1034. / ((293.15 - temperature) * 3.09e-4 + 1.),
+            Fluid::BenzylAlcohol => 1030. / ((313.15 - temperature) * 7.63e-4 + 1.),
         }
     }
 }

@@ -4,12 +4,12 @@ use rayon::prelude::*;
 use std::{cmp::Eq, collections::HashMap, convert::TryInto, hash::Hash};
 
 pub struct Map<T: Coords + Copy> {
-    pub particles: [Particle<T>; 500],
+    pub particles: [Particle<T>; 10950],
     pub dim: T,
     pub radius: f64,
     pub particle_map: HashMap<T::Key, Vec<Particle<T>>>,
-    gravity: f64,
-    gas_constant: f64,
+    pub gravity: f64,
+    pub gas_constant: f64,
 }
 
 impl<T> Map<T>
@@ -91,7 +91,8 @@ where
                         * (other_particle.volume()
                             * particle.properties.color(other_particle.properties));
 
-                    temperature += (other_particle.temperature - particle.temperature)
+                    temperature += particle.properties.diffusivity()
+                        * (other_particle.temperature - particle.temperature)
                         * other_particle.volume()
                         * particle
                             .position
