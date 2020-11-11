@@ -1,9 +1,4 @@
 use std::f64::consts::PI;
-const WATER_BENZYL_TENSION: f64 = 0.03;
-const WATER_VISCOSITY: f64 = 1.12189;
-const WATER_DIFFUSIVITY: f64 = 1.69e-7;
-const BENZYL_VISCOSITY: f64 = 5.7684;
-const BENZYL_DIFFUSIVITY: f64 = 6.912e-7;
 
 pub trait Coords
 where
@@ -21,21 +16,27 @@ where
         dim: &Self,
         delta_t: f64,
     ) -> f64;
+    fn mag(&self) -> f64;
+    fn min(&self, other: Self) -> Self;
+    fn sum(&self) -> f64;
 }
 /// Kernel for general smoothing, h is the radius of the support
 pub trait Poly6Kernel {
+    fn poly6_coeff(h: f64) -> f64;
     fn poly6(&self, h: f64, point: Self) -> f64;
     fn grad_poly6(&self, h: f64, point: Self) -> Self;
     fn laplace_poly6(&self, h: f64, point: Self) -> f64;
 }
 /// Kernel for smoothing pressure, h is the radius of the support
 pub trait SpikyKernel {
+    fn spiky_coeff(h: f64) -> f64;
     fn spiky(&self, h: f64, point: Self) -> f64;
     fn grad_spiky(&self, h: f64, point: Self) -> Self;
     fn laplace_spiky(&self, h: f64, point: Self) -> f64;
 }
 /// Kernel for smoothing viscosity, h is the radius of the support
 pub trait ViscosityKernel {
+    fn visc_coeff(h: f64) -> f64;
     fn visc(&self, h: f64, point: Self) -> f64;
     fn grad_visc(&self, h: f64, point: Self) -> Self;
     fn laplace_visc(&self, h: f64, point: Self) -> f64;
@@ -47,18 +48,18 @@ pub struct Particle<T: Copy> {
     pub density: f64,
     pub mass: f64,
     pub temperature: f64,
-    pub properties: Fluid,
+    pub fluid_type: Fluid,
 }
 
 impl<T: Copy + Coords + Default> Particle<T> {
-    pub fn new(position: T, mass: f64, temperature: f64, properties: Fluid) -> Self {
+    pub fn new(position: T, mass: f64, temperature: f64, fluid_type: Fluid) -> Self {
         Particle {
             position,
             velocity: T::default(),
             density: 0.,
             mass,
             temperature,
-            properties,
+            fluid_type,
         }
     }
     pub fn with_density(mut self, density: f64) -> Self {
@@ -74,16 +75,19 @@ impl<T: Copy + Coords + Default> Particle<T> {
         self
     }
 
-    pub fn density_disparity(&self) -> f64 {
-        self.density - self.properties.density(self.temperature)
+    pub fn gas_coefficient(&self) -> f64 {
+        self.fluid_type.molar_mass()
+            * self.temperature
+            * (self.density - self.fluid_type.density(self.temperature))
     }
+
     pub fn volume(&self) -> f64 {
         self.mass * self.density.recip()
     }
     pub fn control_update(mut self, dim: T, delta_t: f64) -> Self {
-        self.temperature =
-            self.position
-                .control_update(&mut self.velocity, self.temperature, &dim, delta_t);
+        // self.temperature =
+        self.position
+            .control_update(&mut self.velocity, self.temperature, &dim, delta_t);
         self
     }
 }
@@ -100,9 +104,7 @@ impl Point {
     pub fn squared_mag(&self) -> f64 {
         self.x.powi(2) + self.y.powi(2)
     }
-    pub fn mag(&self) -> f64 {
-        self.squared_mag().sqrt()
-    }
+
     pub fn area(&self) -> f64 {
         self.x * self.y
     }
@@ -116,6 +118,15 @@ impl Point {
 
 impl Coords for Point {
     type Key = (u64, u64);
+    fn mag(&self) -> f64 {
+        self.squared_mag().sqrt()
+    }
+    fn min(&self, other: Point) -> Point {
+        Point::new(other.x.min(self.x), other.y.min(self.y))
+    }
+    fn sum(&self) -> f64 {
+        self.x + self.y
+    }
     fn bin(&self, r: f64) -> Self::Key {
         (self.clone() * r.recip()).into()
     }
@@ -152,7 +163,7 @@ impl Coords for Point {
         if self.y > dim.y {
             self.y = dim.y;
             velocity.y = -velocity.y;
-            return 333.15;
+            return 293.15;
         }
         if self.y < 0. {
             self.y = 0.;
@@ -198,6 +209,12 @@ impl Into<(u64, u64)> for Point {
     }
 }
 
+impl Into<[f64; 2]> for Point {
+    fn into(self) -> [f64; 2] {
+        [self.x, self.y]
+    }
+}
+
 impl std::ops::Mul<f64> for Point {
     type Output = Point;
 
@@ -221,13 +238,16 @@ impl std::ops::Div<f64> for Point {
 }
 
 impl Poly6Kernel for Point {
+    fn poly6_coeff(h: f64) -> f64 {
+        4. / PI * h.powi(-8)
+    }
     fn poly6(&self, h: f64, point: Point) -> f64 {
         let dist = self.clone() - point;
         let squared_diff = h.powi(2) - dist.squared_mag();
         if squared_diff < 0. {
             return 0.;
         }
-        h.powi(-9) * squared_diff.powi(3) * 315. * (64. * PI).recip()
+        squared_diff.powi(3) * Self::poly6_coeff(h)
     }
 
     fn grad_poly6(&self, h: f64, point: Point) -> Point {
@@ -236,7 +256,7 @@ impl Poly6Kernel for Point {
         if squared_diff < 0. {
             return Point::default();
         }
-        dist * (-h.powi(-9) * squared_diff.powi(2) * 6. * 315. * (64. * PI).recip())
+        dist * (squared_diff.powi(2) * 6. * Self::poly6_coeff(h))
     }
 
     fn laplace_poly6(&self, h: f64, point: Point) -> f64 {
@@ -245,61 +265,70 @@ impl Poly6Kernel for Point {
         if squared_diff < 0. {
             return 0.;
         }
-        6. * squared_diff * (-squared_diff * 2. + 4. * dist.squared_mag())
+        -6. * squared_diff * (squared_diff * 2. - 4. * dist.squared_mag()) * Self::poly6_coeff(h)
     }
 }
 
 impl SpikyKernel for Point {
+    fn spiky_coeff(h: f64) -> f64 {
+        10. / PI * h.powi(-5)
+    }
     fn spiky(&self, h: f64, point: Point) -> f64 {
         let dist = (self.clone() - point).mag();
         if dist > h {
             return 0.;
         }
-        15. * PI.recip() * h.powi(-6) * dist.powi(3)
+        dist.powi(3) * Self::spiky_coeff(h)
     }
     fn grad_spiky(&self, h: f64, point: Point) -> Point {
         let dist_point = self.clone() - point;
         let dist = dist_point.mag();
-        if dist > h {
+        if dist > h || dist == 0. {
             return Point::default();
         }
-        dist_point * ((-3.) * (h - dist).powi(2) * dist.recip() * 15. * PI.recip() * h.powi(-6))
+        dist_point * ((-3.) * (h - dist).powi(2) * dist.recip() * Self::spiky_coeff(h))
     }
     fn laplace_spiky(&self, h: f64, point: Point) -> f64 {
         let dist_point = self.clone() - point;
         let dist = dist_point.mag();
-        if dist > h {
+        if dist > h || dist == 0. {
             return 0.;
         }
-        (-3.) * (h - dist).powi(2) * dist.recip() + 6. * (h - dist) * 15. * PI.recip() * h.powi(-6)
+        (-3. * h.powi(2) * dist.recip() + 12. * h - 9. * dist) * Self::spiky_coeff(h)
     }
 }
 
 impl ViscosityKernel for Point {
+    fn visc_coeff(h: f64) -> f64 {
+        10. * (3. * PI * h.powi(2)).recip()
+    }
     fn visc(&self, h: f64, point: Self) -> f64 {
         let dist_point = self.clone() - point;
         let dist = dist_point.mag();
         if dist > h {
             return 0.;
         }
-        15. * (2. * PI).recip()
-            * h.powi(-3)
-            * (-dist.powi(3) * h.powi(-3) / 2.
-                + dist.powi(2) * h.powi(-2)
-                + h * (2. * dist).recip()
-                - 1.)
+
+        (-dist.powi(3) * h.powi(-3) / 2. + dist.powi(2) * h.powi(-2) + h * (2. * dist).recip() - 1.)
+            * Self::visc_coeff(h)
     }
     fn grad_visc(&self, h: f64, point: Self) -> Point {
         let dist_point = self.clone() - point;
         let dist = dist_point.mag();
-        dist_point * (-3. / 2. * dist * h.powi(-3) + 2. * h.powi(-2) - h * dist.powi(-3) / 2.)
+        assert!(
+            dist != 0.,
+            "Gradient of viscosity function produced infinity."
+        );
+        dist_point
+            * ((-3. / 2. * dist * h.powi(-3) + 2. * h.powi(-2) - h * dist.powi(-3) / 2.)
+                * Self::visc_coeff(h))
     }
     fn laplace_visc(&self, h: f64, point: Self) -> f64 {
         let dist = (self.clone() - point).mag();
         if dist > h {
             return 0.;
         }
-        45. * PI.recip() * h.powi(-6) * (h - dist)
+        (h - dist) * h.powi(-3) * (6. * Self::visc_coeff(h))
     }
 }
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -309,27 +338,45 @@ pub enum Fluid {
 }
 
 impl Fluid {
+    const WATER_BENZYL_TENSION: f64 = 0.03297;
+    const WATER_VISCOSITY: f64 = 1.12189;
+    const WATER_DIFFUSIVITY: f64 = 1.69e-7;
+    const WATER_DENSITY: f64 = 1034.;
+    const WATER_THERMAL_EXPANSION: f64 = 3.09e-4;
+    const WATER_MOLAR_MASS: f64 = 1.8015e-2;
+    const BENZYL_VISCOSITY: f64 = 5.7684;
+    const BENZYL_DIFFUSIVITY: f64 = 6.912e-7;
+    const BENZYL_DENSITY: f64 = 1030.;
+    const BENZYL_THERMAL_EXPANSION: f64 = 7.63e-4;
+    const BENZYL_MOLAR_MASS: f64 = 1.0814e-1;
     /// Dynamic viscosity
     pub fn viscosity(&self) -> f64 {
         match self {
-            Fluid::Saltwater => WATER_VISCOSITY,
-            Fluid::BenzylAlcohol => BENZYL_VISCOSITY,
+            Fluid::Saltwater => Fluid::WATER_VISCOSITY,
+            Fluid::BenzylAlcohol => Fluid::BENZYL_VISCOSITY,
         }
     }
     pub fn diffusivity(&self) -> f64 {
         match self {
-            Fluid::Saltwater => WATER_DIFFUSIVITY,
-            Fluid::BenzylAlcohol => BENZYL_DIFFUSIVITY,
+            Fluid::Saltwater => Fluid::WATER_DIFFUSIVITY,
+            Fluid::BenzylAlcohol => Fluid::BENZYL_DIFFUSIVITY,
+        }
+    }
+    // molar mass in kg/mol
+    pub fn molar_mass(&self) -> f64 {
+        match self {
+            Fluid::Saltwater => Fluid::WATER_MOLAR_MASS,
+            Fluid::BenzylAlcohol => Fluid::BENZYL_MOLAR_MASS,
         }
     }
     pub fn interfacial_tension(&self, fluid: Fluid) -> f64 {
         match self {
             Fluid::Saltwater => match fluid {
                 Fluid::Saltwater => 0.,
-                Fluid::BenzylAlcohol => WATER_BENZYL_TENSION,
+                Fluid::BenzylAlcohol => Fluid::WATER_BENZYL_TENSION,
             },
             Fluid::BenzylAlcohol => match fluid {
-                Fluid::Saltwater => WATER_BENZYL_TENSION,
+                Fluid::Saltwater => Fluid::WATER_BENZYL_TENSION,
                 Fluid::BenzylAlcohol => 0.,
             },
         }
@@ -350,8 +397,14 @@ impl Fluid {
 
     pub fn density(&self, temperature: f64) -> f64 {
         match self {
-            Fluid::Saltwater => 1034. / ((293.15 - temperature) * 3.09e-4 + 1.),
-            Fluid::BenzylAlcohol => 1030. / ((313.15 - temperature) * 7.63e-4 + 1.),
+            Fluid::Saltwater => {
+                Fluid::WATER_DENSITY
+                    / ((293.15 - temperature) * Fluid::WATER_THERMAL_EXPANSION + 1.)
+            }
+            Fluid::BenzylAlcohol => {
+                Fluid::BENZYL_DENSITY
+                    / ((313.15 - temperature) * Fluid::BENZYL_THERMAL_EXPANSION + 1.)
+            }
         }
     }
 }
