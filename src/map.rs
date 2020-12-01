@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use std::{cmp::Eq, collections::HashMap, convert::TryInto, hash::Hash};
 
 pub struct Map<T: Coords + Copy> {
-    pub particles: [Particle<T>; 945],
+    pub particles: [Particle<T>; 10693],
     pub dim: T,
     pub radius: f64,
     pub particle_map: HashMap<T::Key, Vec<Particle<T>>>,
@@ -72,7 +72,6 @@ where
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
                 for other_particle in particles {
-                    particle.position.min(self.dim - particle.position).sum();
                     acceleration += particle
                         .position
                         .grad_spiky(self.radius, other_particle.position)
