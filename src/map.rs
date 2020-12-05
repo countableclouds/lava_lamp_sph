@@ -1,10 +1,10 @@
 use crate::utility::*;
+use crate::NUM_PARTICLES;
 use rayon::prelude::*;
-
 use std::{cmp::Eq, collections::HashMap, convert::TryInto, hash::Hash};
 
 pub struct Map<T: Coords + Copy> {
-    pub particles: [Particle<T>; 10693],
+    pub particles: [Particle<T>; NUM_PARTICLES as usize],
     pub dim: T,
     pub radius: f64,
     pub particle_map: HashMap<T::Key, Vec<Particle<T>>>,
@@ -46,13 +46,6 @@ where
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
                 for other_particle in particles {
-                    // if (other_particle.position - particle.position).mag() < 0.000000001
-                    //     && other_particle != particle
-                    // {
-                    //     println!("{}", particle
-                    //     .position
-                    //     .poly6(self.radius, other_particle.position));
-                    // }
                     density += other_particle.mass
                         * particle
                             .position

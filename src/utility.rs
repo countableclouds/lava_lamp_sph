@@ -1,4 +1,4 @@
-use na::{Point3, UnitQuaternion, Vector3};
+use na::{Point3, Translation3, UnitQuaternion, Vector3};
 use std::f64::consts::PI;
 
 pub trait Coords
@@ -378,6 +378,9 @@ impl Point3D {
     }
     pub fn na_point(&self) -> Point3<f32> {
         Point3::<f32>::new(self.x as f32, self.y as f32, self.z as f32)
+    }
+    pub fn translation(&self) -> Translation3<f32> {
+        Translation3::new(self.x as f32, self.y as f32, self.z as f32)
     }
 }
 
