@@ -18,6 +18,8 @@ where
         delta_t: f64,
     ) -> f64;
     fn mag(&self) -> f64;
+    fn squared_mag(&self) -> f64;
+    fn dot(&self, other: Self) -> f64;
 }
 /// Kernel for general smoothing, h is the radius of the support
 pub trait Poly6Kernel {
@@ -74,10 +76,8 @@ impl<T: Copy + Coords + Default> Particle<T> {
         self
     }
 
-    pub fn gas_coefficient(&self) -> f64 {
-        self.fluid_type.molar_mass().recip()
-            * self.temperature
-            * (self.density - self.fluid_type.density(self.temperature))
+    pub fn delta_density(&self) -> f64 {
+        self.density - self.fluid_type.density(self.temperature)
     }
 
     pub fn volume(&self) -> f64 {
@@ -100,9 +100,6 @@ impl Point {
     pub fn new(x: f64, y: f64) -> Point {
         Point { x, y }
     }
-    pub fn squared_mag(&self) -> f64 {
-        self.x.powi(2) + self.y.powi(2)
-    }
 
     pub fn area(&self) -> f64 {
         self.x * self.y
@@ -117,6 +114,9 @@ impl Point {
 
 impl Coords for Point {
     type Key = (u64, u64);
+    fn squared_mag(&self) -> f64 {
+        self.x.powi(2) + self.y.powi(2)
+    }
     fn mag(&self) -> f64 {
         self.squared_mag().sqrt()
     }
@@ -132,6 +132,9 @@ impl Coords for Point {
             self.with_y(self.y + r),
             self.with_y(self.y - r),
         ]
+    }
+    fn dot(&self, other: Point) -> f64 {
+        other.x * self.x + other.y * self.y
     }
     fn height(height: f64) -> Point {
         Point::new(0., height)
@@ -309,10 +312,10 @@ impl ViscosityKernel for Point {
     fn grad_visc(&self, h: f64, point: Self) -> Point {
         let dist_point = self.clone() - point;
         let dist = dist_point.mag();
-        assert!(
-            dist != 0.,
-            "Gradient of viscosity function produced infinity."
-        );
+        if dist > h || dist == 0. {
+            return Point::default();
+        }
+
         dist_point
             * ((-3. / 2. * dist * h.powi(-3) + 2. * h.powi(-2) - h * dist.powi(-3) / 2.)
                 * Self::visc_coeff(h))
@@ -336,13 +339,11 @@ impl Point3D {
     pub fn new(x: f64, y: f64, z: f64) -> Point3D {
         Point3D { x, y, z }
     }
-    pub fn squared_mag(&self) -> f64 {
-        self.x.powi(2) + self.y.powi(2) + self.z.powi(2)
-    }
 
     pub fn volume(&self) -> f64 {
         self.x * self.y * self.z
     }
+
     pub fn with_x(&self, x: f64) -> Point3D {
         Point3D {
             x,
@@ -386,6 +387,9 @@ impl Point3D {
 
 impl Coords for Point3D {
     type Key = (u64, u64, u64);
+    fn squared_mag(&self) -> f64 {
+        self.x.powi(2) + self.y.powi(2) + self.z.powi(2)
+    }
     fn mag(&self) -> f64 {
         self.squared_mag().sqrt()
     }
@@ -403,6 +407,9 @@ impl Coords for Point3D {
             self.with_z(self.z + r),
             self.with_z(self.z - r),
         ]
+    }
+    fn dot(&self, other: Point3D) -> f64 {
+        other.x * self.x + other.y * self.y + other.z * self.z
     }
     fn height(height: f64) -> Self {
         Self::new(0., 0., height)
@@ -596,10 +603,9 @@ impl ViscosityKernel for Point3D {
     fn grad_visc(&self, h: f64, point: Self) -> Point3D {
         let dist_point = self.clone() - point;
         let dist = dist_point.mag();
-        assert!(
-            dist != 0.,
-            "Gradient of viscosity function produced infinity."
-        );
+        if dist > h || dist == 0. {
+            return Point3D::default();
+        }
         dist_point
             * ((-3. / 2. * dist * h.powi(-3) + 2. * h.powi(-2) - h * dist.powi(-3) / 2.)
                 * Self::visc_coeff(h))
