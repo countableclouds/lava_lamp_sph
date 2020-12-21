@@ -9,7 +9,6 @@ pub struct Map<T: Coords + Copy> {
     pub radius: f64,
     pub particle_map: HashMap<T::Key, Vec<(usize, Particle<T>)>>,
     pub gravity: f64,
-    pub gas_constant: f64,
 }
 
 impl<T> Map<T>
@@ -116,7 +115,7 @@ where
                     for (_, other_particle) in particles {
                         inverse_densities[i] += particle
                             .position
-                            .grad_spiky(self.radius, other_particle.position)
+                            .grad_poly6(self.radius, other_particle.position)
                             * (other_particle.volume() / other_particle.density);
                     }
                 }
@@ -128,12 +127,12 @@ where
                     for (_, other_particle) in particles {
                         diagonal[i] -= particle
                             .position
-                            .grad_spiky(self.radius, other_particle.position)
+                            .grad_poly6(self.radius, other_particle.position)
                             .dot(
                                 inverse_densities[i]
                                     + particle
                                         .position
-                                        .grad_spiky(self.radius, other_particle.position)
+                                        .grad_poly6(self.radius, other_particle.position)
                                         * (particle.mass * particle.density.powi(-2)),
                             )
                             * (other_particle.mass * delta_t.powi(2));
@@ -189,11 +188,14 @@ where
         let num_iter: u64 = 100;
         let relaxation_coeff = 0.5;
         let mut pressures: [f64; NUM_PARTICLES] = [0.; NUM_PARTICLES];
-        let mut image: [f64; NUM_PARTICLES] = [0.; NUM_PARTICLES];
+
         let mut pressure_accelerations: [T; NUM_PARTICLES] = [T::default(); NUM_PARTICLES];
         let diagonal = self.get_diagonal(delta_t);
         let density_diff = self.get_density_differences(delta_t);
-        for i in 0..num_iter {
+        let mut error;
+        for _ in 0..num_iter {
+            let mut image: [f64; NUM_PARTICLES] = [0.; NUM_PARTICLES];
+            error = 0.;
             for (i, particle) in self.particles.iter().enumerate() {
                 for point in particle.position.along_axes(self.radius) {
                     if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
@@ -206,15 +208,19 @@ where
                         }
                     }
                 }
-                pressures[i] =
-                    pressures[i] + relaxation_coeff * (density_diff[i] - image[i]) / diagonal[i];
+                pressures[i] += relaxation_coeff * (density_diff[i] - image[i]) / diagonal[i];
+                pressures[i] = pressures[i].max(0.)
             }
-            let mut error = 0.;
-            for i in 0..image.len() {
-                error += (density_diff[i] - image[i]).abs();
-            }
-            println!("{:?}", (error / NUM_PARTICLES as f64));
             pressure_accelerations = self.get_pressure_accelerations(pressures);
+
+            // for i in 0..image.len() {
+            //     error += (density_diff[i] - image[i]).abs();
+            // }
+            // println!("{:?}", error);
+            // println!(
+            //     "count: {}",
+            //     pressures.len() - pressures.iter().filter(|&n| *n == 0.).count()
+            // )
         }
 
         self.particles = self
@@ -253,7 +259,7 @@ where
             .try_into()
             .expect("Expected a Vec of a different length");
 
-        // self.update_pressure_velocity(delta_t);
+        self.update_pressure_velocity(delta_t);
         self.particles = self
             .particles
             .iter()
