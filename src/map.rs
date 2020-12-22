@@ -115,7 +115,7 @@ where
                     for (_, other_particle) in particles {
                         inverse_densities[i] += particle
                             .position
-                            .grad_poly6(self.radius, other_particle.position)
+                            .grad_spiky(self.radius, other_particle.position)
                             * (other_particle.volume() / other_particle.density);
                     }
                 }
@@ -127,12 +127,12 @@ where
                     for (_, other_particle) in particles {
                         diagonal[i] -= particle
                             .position
-                            .grad_poly6(self.radius, other_particle.position)
+                            .grad_spiky(self.radius, other_particle.position)
                             .dot(
                                 inverse_densities[i]
                                     + particle
                                         .position
-                                        .grad_poly6(self.radius, other_particle.position)
+                                        .grad_spiky(self.radius, other_particle.position)
                                         * (particle.mass * particle.density.powi(-2)),
                             )
                             * (other_particle.mass * delta_t.powi(2));
@@ -185,7 +185,7 @@ where
     }
 
     pub fn update_pressure_velocity(&mut self, delta_t: f64) {
-        let num_iter: u64 = 100;
+        let num_iter: u64 = 1000;
         let relaxation_coeff = 0.5;
         let mut pressures: [f64; NUM_PARTICLES] = [0.; NUM_PARTICLES];
 
@@ -213,14 +213,15 @@ where
             }
             pressure_accelerations = self.get_pressure_accelerations(pressures);
 
-            // for i in 0..image.len() {
-            //     error += (density_diff[i] - image[i]).abs();
-            // }
-            // println!("{:?}", error);
-            // println!(
-            //     "count: {}",
-            //     pressures.len() - pressures.iter().filter(|&n| *n == 0.).count()
-            // )
+            for i in 0..image.len() {
+                error += (density_diff[i] - image[i]).abs();
+            }
+            println!("{:?}", error);
+            println!(
+                "count: {}, pressure average: {}",
+                pressures.len() - pressures.iter().filter(|&n| *n == 0.).count(),
+                pressures.iter().fold(0., |a, b| a + b) / pressures.len() as f64
+            )
         }
 
         self.particles = self

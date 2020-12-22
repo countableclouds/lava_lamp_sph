@@ -4,7 +4,18 @@ use conrod::{
     widget::{Canvas, Slider},
     Scalar,
 };
+use kiss3d::camera::Camera;
+use kiss3d::context::Context;
+use kiss3d::planar_camera::PlanarCamera;
+use kiss3d::post_processing::PostProcessingEffect;
+use kiss3d::renderer::Renderer;
+use kiss3d::resource::{
+    AllocationType, BufferType, Effect, GPUVec, ShaderAttribute, ShaderUniform,
+};
+use kiss3d::text::Font;
 use kiss3d::widget_ids;
+
+use nalgebra::{Matrix4, Point2};
 
 use kiss3d::conrod::color::{Color, Colorable};
 use kiss3d::conrod::position::{Positionable, Sizeable};
@@ -28,26 +39,6 @@ use connectome_model::{
 };
 use rand::{distributions::Uniform, rngs::ThreadRng, seq::IteratorRandom, Rng};
 
-struct AppState {
-    ids: Ids,
-    app: DemoApp,
-}
-
-impl AppState {
-    fn new(window: &mut Window, ids: Ids, app: DemoApp) -> Self {
-        Self { ids, app }
-    }
-}
-
-impl State for AppState {
-    fn step(&mut self, window: &mut Window) {
-        self.app.step(window);
-
-        let mut ui = window.conrod_ui_mut().set_widgets();
-        self.app.gui(&mut ui, &self.ids);
-    }
-}
-
 #[wasm_bindgen]
 pub fn init_panic_hook() {
     console_error_panic_hook::set_once();
@@ -63,13 +54,11 @@ pub fn main() -> Result<(), JsValue> {
     window.set_light(Light::StickToCamera);
 
     // Generate the widget identifiers.
-    let ids = Ids::new(window.conrod_ui_mut().widget_id_generator());
-    let app = DemoApp::new();
-    window.conrod_ui_mut().theme = theme();
+    let app = AppState {
+        point_cloud_renderer: PointCloudRenderer::new(400.0),
+    };
 
-    let state = AppState::new(&mut window, ids, app);
-
-    window.render_loop(state);
+    window.render_loop(app);
     Ok(())
 }
 
@@ -118,378 +107,132 @@ widget_ids! {
 pub const WIN_W: u32 = 600;
 pub const WIN_H: u32 = 420;
 
-pub struct DemoApp {
-    sim_state: Option<SimState>,
-    sim_params: SimParams,
-    sim_invalidated: bool,
+struct AppState {
+    point_cloud_renderer: PointCloudRenderer,
 }
 
-impl DemoApp {
-    pub fn new() -> Self {
-        DemoApp {
-            sim_state: Default::default(),
-            sim_params: Default::default(),
-            sim_invalidated: Default::default(),
-        }
+impl State for AppState {
+    // Return the custom renderer that will be called at each
+    // render loop.
+    fn cameras_and_effect_and_renderer(
+        &mut self,
+    ) -> (
+        Option<&mut dyn Camera>,
+        Option<&mut dyn PlanarCamera>,
+        Option<&mut dyn Renderer>,
+        Option<&mut dyn PostProcessingEffect>,
+    ) {
+        (None, None, Some(&mut self.point_cloud_renderer), None)
     }
 
-    fn gui(&mut self, ui: &mut conrod::UiCell, ids: &Ids) {
-        const PADDING: Scalar = 20.0;
-        const VERTICAL_SPACING: Scalar = 20.0;
-
-        Canvas::new()
-            .pad(PADDING)
-            .align_top()
-            .align_left()
-            .w(ui.win_w * 0.2)
-            .h(ui.win_h * 0.5)
-            .scroll_kids_vertically()
-            .color(Color::Rgba(0.0, 0.0, 0.0, 0.5))
-            .set(ids.canvas, ui);
-
-        Text::new("connectivity rate")
-            .parent(ids.canvas)
-            .align_top()
-            .align_middle_x()
-            .padded_w_of(ids.canvas, PADDING)
-            .set(ids.connectivity_text, ui);
-
-        for value in Slider::new(self.sim_params.connectivity_rate, 0.0, 1.0)
-            .h(20.0)
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.connectivity_text, VERTICAL_SPACING)
-            .set(ids.connectivity_slider, ui)
-        {
-            self.sim_params.connectivity_rate = value;
-            self.sim_invalidated = true;
-        }
-
-        Text::new("myelination rate")
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.connectivity_slider, VERTICAL_SPACING)
-            .set(ids.myelination_text, ui);
-
-        for value in Slider::new(self.sim_params.myelination_rate, 0.0, 1.0)
-            .h(20.0)
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.myelination_text, VERTICAL_SPACING)
-            .set(ids.myelination_slider, ui)
-        {
-            self.sim_params.myelination_rate = value;
-            self.sim_invalidated = true;
-        }
-
-        Text::new("myelination decay rate")
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.myelination_slider, VERTICAL_SPACING)
-            .set(ids.decay_text, ui);
-
-        for value in Slider::new(self.sim_params.decay_rate, 0.0, 0.1)
-            .h(20.0)
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.decay_text, VERTICAL_SPACING)
-            .set(ids.decay_slider, ui)
-        {
-            self.sim_params.decay_rate = value;
-            self.sim_invalidated = true;
-        }
-
-        Text::new("max myelination")
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.decay_slider, VERTICAL_SPACING)
-            .set(ids.max_myelination_text, ui);
-
-        for value in Slider::new(self.sim_params.max_myelination as f32, 0.0, 20.0)
-            .h(20.0)
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.max_myelination_text, VERTICAL_SPACING)
-            .set(ids.max_myelination_slider, ui)
-        {
-            self.sim_params.max_myelination = value as usize;
-            self.sim_invalidated = true;
-        }
-
-        Text::new("distance exponent")
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.max_myelination_slider, VERTICAL_SPACING)
-            .set(ids.distance_exp_text, ui);
-
-        for value in Slider::new(self.sim_params.distance_exp as f32, 0.0, 10.0)
-            .h(20.0)
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.distance_exp_text, VERTICAL_SPACING)
-            .set(ids.distance_exp_slider, ui)
-        {
-            self.sim_params.distance_exp = value as i32;
-            self.sim_invalidated = true;
-        }
-
-        Text::new("refractory period")
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.distance_exp_slider, VERTICAL_SPACING)
-            .set(ids.refractory_period_text, ui);
-
-        for value in Slider::new(self.sim_params.refractory_period as f32, 0.0, 10.0)
-            .h(20.0)
-            .parent(ids.canvas)
-            .padded_w_of(ids.canvas, PADDING)
-            .down_from(ids.refractory_period_text, VERTICAL_SPACING)
-            .set(ids.refractory_period_slider, ui)
-        {
-            self.sim_params.refractory_period = value as usize;
-            self.sim_invalidated = true;
-        }
-
-        Text::new(&format!(
-            "simplex sizes: {:?}\nbetti numbers: {:?}",
-            self.sim_state.as_ref().unwrap().cached_outputs.0,
-            self.sim_state.as_ref().unwrap().cached_outputs.1,
-        ))
-        .parent(ids.canvas)
-        .padded_w_of(ids.canvas, PADDING)
-        .down_from(ids.refractory_period_slider, VERTICAL_SPACING)
-        .set(ids.output_text, ui);
-    }
-}
-
-impl State for DemoApp {
     fn step(&mut self, window: &mut Window) {
-        if self.sim_invalidated {
-            self.sim_state.take().map(|mut state| state.cleanup(window));
-            self.sim_invalidated = false;
+        if self.point_cloud_renderer.num_points() < 1_000_000 {
+            // Add some random points to the point cloud.
+            for _ in 0..1_000 {
+                let random: Point3<f32> = rand::random();
+                self.point_cloud_renderer
+                    .push((random - Vector3::repeat(0.5)) * 0.5, rand::random());
+            }
         }
 
-        let params = self.sim_params;
-
-        self.sim_state
-            .get_or_insert_with(|| SimState::new(params, window))
-            .step(window);
-    }
-}
-
-#[derive(Clone, Copy)]
-struct SimParams {
-    connectivity_rate: f64,
-    myelination_rate: f64,
-    decay_rate: f64,
-    max_myelination: usize,
-    distance_exp: i32,
-    refractory_period: usize,
-}
-
-impl Default for SimParams {
-    fn default() -> Self {
-        Self {
-            connectivity_rate: 0.5,
-            myelination_rate: 0.5,
-            decay_rate: 0.01,
-            max_myelination: 10,
-            distance_exp: 4,
-            refractory_period: 3,
-        }
-    }
-}
-
-struct SimState {
-    rng: ThreadRng,
-    sim: Simulation<ThreadRng>,
-    simplicial_complex: SimplicialComplex,
-    cached_outputs: (Vec<usize>, Vec<i64>),
-    neuron_nodes: HashMap<usize, SceneNode>,
-    synapse_nodes: HashMap<(usize, usize), SceneNode>,
-    activity_nodes: Vec<SceneNode>,
-}
-
-impl SimState {
-    const NUM_NODES: u32 = 6;
-    const VIS_SCALE: f32 = 0.2;
-    const SYNAPSE_MAX_WIDTH: f32 = 0.01;
-
-    fn new(params: SimParams, window: &mut Window) -> Self {
-        let rng = rand::thread_rng();
-        let mut sim = Simulation::new(
-            params.connectivity_rate,
-            params.myelination_rate,
-            params.decay_rate,
-            params.max_myelination,
-            params.distance_exp,
-            params.refractory_period,
-            rand::thread_rng(),
+        let num_points_text = format!(
+            "Number of points: {}",
+            self.point_cloud_renderer.num_points()
         );
-
-        sim.init_uniform(3, Self::NUM_NODES);
-
-        let simplicial_complex =
-            SimplicialComplex::new((0..Self::NUM_NODES.pow(3) as usize).collect());
-
-        let mut neuron_nodes = HashMap::with_capacity(sim.graph.node_count());
-
-        for (id, node) in sim.graph.node_references() {
-            let mut scene_node = window.add_sphere(0.05);
-            scene_node.append_translation(&Translation3::from(
-                nalgebra::convert::<_, Vector3<f32>>(node.position.coords) * Self::VIS_SCALE,
-            ));
-
-            neuron_nodes.insert(id.index(), scene_node);
-        }
-
-        let synapse_nodes = HashMap::new();
-        let activity_nodes = Vec::new();
-
-        Self {
-            rng,
-            sim,
-            simplicial_complex,
-            cached_outputs: Default::default(),
-            neuron_nodes,
-            synapse_nodes,
-            activity_nodes,
-        }
-    }
-
-    fn cleanup(&mut self, window: &mut Window) {
-        for scene_node in self
-            .neuron_nodes
-            .values_mut()
-            .chain(self.synapse_nodes.values_mut())
-            .chain(self.activity_nodes.iter_mut())
-        {
-            window.remove_node(scene_node);
-        }
-    }
-}
-
-impl State for SimState {
-    fn step(&mut self, window: &mut Window) {
-        let id_range = Uniform::new(0, Self::NUM_NODES.pow(3) as usize);
-
-        let result = self.sim.step(
-            &self
-                .rng
-                .sample_iter(id_range)
-                .take(if self.sim.timestep < 4000 { 10 } else { 2 })
-                .collect::<Vec<_>>(),
+        window.draw_text(
+            &num_points_text,
+            &Point2::new(0.0, 20.0),
+            60.0,
+            &Font::default(),
+            &Point3::new(1.0, 1.0, 1.0),
         );
-
-        for (id, node) in self.sim.graph.node_references() {
-            let scene_node = self.neuron_nodes.get_mut(&id.index()).unwrap();
-
-            if node.is_active(self.sim.timestep) {
-                scene_node.set_color(1.0, 0.9, 0.0);
-            } else {
-                scene_node.set_color(0.75, 0.75, 0.75)
-            }
-        }
-
-        for pair in result.removed_edges {
-            self.simplicial_complex.remove(vec![pair.0, pair.1]);
-
-            window.remove_node(&mut self.synapse_nodes.remove(&pair).unwrap());
-        }
-
-        for (source_id, target_id) in result.added_edges {
-            self.simplicial_complex.add(vec![source_id, target_id]);
-
-            let source = self
-                .sim
-                .graph
-                .node_weight(NodeIndex::new(source_id))
-                .unwrap();
-            let target = self
-                .sim
-                .graph
-                .node_weight(NodeIndex::new(target_id))
-                .unwrap();
-
-            let source_vec =
-                nalgebra::convert::<_, Vector3<f32>>(source.position.coords) * Self::VIS_SCALE;
-            let target_vec =
-                nalgebra::convert::<_, Vector3<f32>>(target.position.coords) * Self::VIS_SCALE;
-
-            let dist = distance(&source.position, &target.position) as f32 * Self::VIS_SCALE;
-            let trans = Translation3::from((source_vec + target_vec) * 0.5);
-            let rot = UnitQuaternion::face_towards(&(target_vec - source_vec), &Vector3::y());
-
-            let mut scene_node = window.add_cylinder(1.0, dist);
-            scene_node.append_translation(&trans);
-
-            if ((target_vec - source_vec).normalize().abs() - Vector3::y()).magnitude() != 0.0 {
-                scene_node.append_rotation_wrt_center(&UnitQuaternion::face_towards(
-                    &Vector3::y(),
-                    &Vector3::z(),
-                ));
-
-                scene_node.append_rotation_wrt_center(&rot);
-            }
-
-            self.synapse_nodes
-                .insert((source_id, target_id), scene_node);
-        }
-
-        for node in self.activity_nodes.iter_mut() {
-            window.remove_node(node);
-        }
-
-        self.activity_nodes.clear();
-
-        for edge in self.sim.graph.edge_references() {
-            let source = self.sim.graph.node_weight(edge.source()).unwrap();
-            let target = self.sim.graph.node_weight(edge.target()).unwrap();
-
-            let weight = edge.weight();
-
-            let source_vec =
-                nalgebra::convert::<_, Vector3<f32>>(source.position.coords) * Self::VIS_SCALE;
-            let target_vec =
-                nalgebra::convert::<_, Vector3<f32>>(target.position.coords) * Self::VIS_SCALE;
-
-            let dist = distance(&source.position, &target.position) as f32 * Self::VIS_SCALE;
-            let radius = (weight.myelination + 1) as f32
-                * (Self::SYNAPSE_MAX_WIDTH / (self.sim.max_myelination + 1) as f32);
-
-            let scene_node = self
-                .synapse_nodes
-                .get_mut(&(edge.source().index(), edge.target().index()))
-                .unwrap();
-
-            scene_node.set_local_scale(radius * 2.0, dist, radius * 2.0);
-
-            for activation in weight.activation_queue.iter() {
-                let mut scene_node = window.add_sphere(0.025);
-
-                scene_node.set_color(1.0, 0.9, 0.0);
-                scene_node.append_translation(&Translation3::from(
-                    source_vec
-                        + ((target_vec - source_vec).normalize()
-                            * (dist / (1 + (activation.at - activation.queued_at)) as f32)
-                            * (self.sim.timestep - activation.queued_at + 1) as f32),
-                ));
-
-                self.activity_nodes.push(scene_node);
-            }
-        }
-
-        if self.sim.timestep % 10 == 0 {
-            let lengths = self
-                .simplicial_complex
-                .simplices
-                .iter()
-                .map(|simplex| simplex.len())
-                .collect();
-
-            let betti_numbers = self.simplicial_complex.betti_numbers();
-
-            self.cached_outputs = (lengths, betti_numbers);
-        }
     }
 }
+
+/// Structure which manages the display of long-living points.
+struct PointCloudRenderer {
+    shader: Effect,
+    pos: ShaderAttribute<Point3<f32>>,
+    color: ShaderAttribute<Point3<f32>>,
+    proj: ShaderUniform<Matrix4<f32>>,
+    view: ShaderUniform<Matrix4<f32>>,
+    colored_points: GPUVec<Point3<f32>>,
+    point_size: f32,
+}
+
+impl PointCloudRenderer {
+    /// Creates a new points renderer.
+    fn new(point_size: f32) -> PointCloudRenderer {
+        let mut shader = Effect::new_from_str(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC);
+
+        shader.use_program();
+
+        PointCloudRenderer {
+            colored_points: GPUVec::new(Vec::new(), BufferType::Array, AllocationType::StreamDraw),
+            pos: shader.get_attrib::<Point3<f32>>("position").unwrap(),
+            color: shader.get_attrib::<Point3<f32>>("color").unwrap(),
+            proj: shader.get_uniform::<Matrix4<f32>>("proj").unwrap(),
+            view: shader.get_uniform::<Matrix4<f32>>("view").unwrap(),
+            shader,
+            point_size,
+        }
+    }
+
+    fn push(&mut self, point: Point3<f32>, color: Point3<f32>) {
+        if let Some(colored_points) = self.colored_points.data_mut() {
+            colored_points.push(point);
+            colored_points.push(color);
+        }
+    }
+
+    fn num_points(&self) -> usize {
+        self.colored_points.len() / 2
+    }
+}
+
+impl Renderer for PointCloudRenderer {
+    /// Actually draws the points.
+    fn render(&mut self, pass: usize, camera: &mut dyn Camera) {
+        if self.colored_points.len() == 0 {
+            return;
+        }
+
+        self.shader.use_program();
+        self.pos.enable();
+        self.color.enable();
+
+        camera.upload(pass, &mut self.proj, &mut self.view);
+
+        self.color.bind_sub_buffer(&mut self.colored_points, 1, 1);
+        self.pos.bind_sub_buffer(&mut self.colored_points, 1, 0);
+
+        let ctxt = Context::get();
+        ctxt.point_size(self.point_size);
+        ctxt.draw_arrays(Context::POINTS, 0, (self.colored_points.len() / 2) as i32);
+
+        self.pos.disable();
+        self.color.disable();
+    }
+}
+
+const VERTEX_SHADER_SRC: &'static str = "#version 100
+    attribute vec3 position;
+    attribute vec3 color;
+    varying   vec3 Color;
+    uniform   mat4 proj;
+    uniform   mat4 view;
+    void main() {
+        gl_Position = proj * view * vec4(position, 1.0);
+        Color = color;
+    }";
+
+const FRAGMENT_SHADER_SRC: &'static str = "#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+   precision highp float;
+#else
+   precision mediump float;
+#endif
+    varying vec3 Color;
+    void main() {
+        gl_FragColor = vec4(Color, 1.0);
+    }";
