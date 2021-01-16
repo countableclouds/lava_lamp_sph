@@ -8,7 +8,8 @@ where
     type Key;
     fn bin(&self, r: f64) -> Self::Key;
     fn along_axes(&self, r: f64) -> Vec<Self>;
-    fn height(height: f64) -> Self;
+    fn with_height(self, height: f64) -> Self;
+    fn height(&self) -> f64;
     fn normalize(self) -> Self;
     fn control_update(
         &mut self,
@@ -20,6 +21,8 @@ where
     fn mag(&self) -> f64;
     fn squared_mag(&self) -> f64;
     fn dot(&self, other: Self) -> f64;
+    fn proj(&self) -> Vec<Self>;
+    fn apply(&self, func: Box<dyn Fn(f64) -> f64>) -> Self;
 }
 /// Kernel for general smoothing, h is the radius of the support
 pub trait Poly6Kernel {
@@ -41,6 +44,21 @@ pub trait ViscosityKernel {
     fn visc(&self, h: f64, point: Self) -> f64;
     fn grad_visc(&self, h: f64, point: Self) -> Self;
     fn laplace_visc(&self, h: f64, point: Self) -> f64;
+}
+
+pub trait QuinticSplineKernel {
+    fn quintic_coeff(h: f64) -> f64;
+    fn quintic(&self, h: f64, point: Self) -> f64;
+    fn grad_quintic(&self, h: f64, point: Self) -> Self;
+    fn laplace_quintic(&self, h: f64, point: Self) -> f64;
+}
+
+/// Kernel for smoothing viscosity, h is the radius of the support
+pub trait CubicSplineKernel {
+    fn cubic_coeff(h: f64) -> f64;
+    fn cubic(&self, h: f64, point: Self) -> f64;
+    fn grad_cubic(&self, h: f64, point: Self) -> Self;
+    fn laplace_cubic(&self, h: f64, point: Self) -> f64;
 }
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Particle<T: Copy> {
@@ -75,9 +93,12 @@ impl<T: Copy + Coords + Default> Particle<T> {
         self.velocity = velocity;
         self
     }
+    pub fn expected_density(&self) -> f64 {
+        self.fluid_type.density(self.temperature)
+    }
 
     pub fn delta_density(&self) -> f64 {
-        self.density - self.fluid_type.density(self.temperature)
+        self.density - self.expected_density()
     }
 
     pub fn volume(&self) -> f64 {
@@ -113,7 +134,7 @@ impl Point {
 }
 
 impl Coords for Point {
-    type Key = (u64, u64);
+    type Key = (i64, i64);
     fn squared_mag(&self) -> f64 {
         self.x.powi(2) + self.y.powi(2)
     }
@@ -131,13 +152,22 @@ impl Coords for Point {
             self.with_x(self.x - r),
             self.with_y(self.y + r),
             self.with_y(self.y - r),
+            self.with_x(self.x + r).with_y(self.y + r),
+            self.with_x(self.x + r).with_y(self.y - r),
+            self.with_x(self.x - r).with_y(self.y + r),
+            self.with_x(self.x - r).with_y(self.y - r),
         ]
     }
     fn dot(&self, other: Point) -> f64 {
         other.x * self.x + other.y * self.y
     }
-    fn height(height: f64) -> Point {
-        Point::new(0., height)
+    fn with_height(mut self, height: f64) -> Point {
+        self.y = height;
+        self
+    }
+
+    fn height(&self) -> f64 {
+        self.y
     }
 
     fn normalize(self) -> Self {
@@ -168,6 +198,12 @@ impl Coords for Point {
             return 293.15;
         }
         temperature
+    }
+    fn proj(&self) -> Vec<Self> {
+        vec![Point::new(0., self.y), Point::new(self.x, 0.)]
+    }
+    fn apply(&self, func: Box<dyn Fn(f64) -> f64>) -> Self {
+        Point::new(func(self.x), func(self.y))
     }
 }
 
@@ -200,9 +236,9 @@ impl std::ops::Sub for Point {
     }
 }
 
-impl Into<(u64, u64)> for Point {
-    fn into(self) -> (u64, u64) {
-        (self.x as u64, self.y as u64)
+impl Into<(i64, i64)> for Point {
+    fn into(self) -> (i64, i64) {
+        (self.x.floor() as i64, self.y.floor() as i64)
     }
 }
 
@@ -302,7 +338,7 @@ impl ViscosityKernel for Point {
     fn visc(&self, h: f64, point: Self) -> f64 {
         let dist_point = self.clone() - point;
         let dist = dist_point.mag();
-        if dist > h {
+        if dist > h || dist == 0. {
             return 0.;
         }
 
@@ -386,7 +422,7 @@ impl Point3D {
 }
 
 impl Coords for Point3D {
-    type Key = (u64, u64, u64);
+    type Key = (i64, i64, i64);
     fn squared_mag(&self) -> f64 {
         self.x.powi(2) + self.y.powi(2) + self.z.powi(2)
     }
@@ -398,21 +434,29 @@ impl Coords for Point3D {
         (self.clone() * r.recip()).into()
     }
     fn along_axes(&self, r: f64) -> Vec<Point3D> {
-        vec![
-            self.clone(),
-            self.with_x(self.x + r),
-            self.with_x(self.x - r),
-            self.with_y(self.y + r),
-            self.with_y(self.y - r),
-            self.with_z(self.z + r),
-            self.with_z(self.z - r),
-        ]
+        let mut points: Vec<Point3D> = Vec::new();
+        for i in -1..2 {
+            for j in -1..2 {
+                for k in -1..2 {
+                    points.push(Point3D::new(
+                        self.x + (i as f64) * r,
+                        self.y + (j as f64) * r,
+                        self.z + (k as f64) * r,
+                    ))
+                }
+            }
+        }
+        points
     }
     fn dot(&self, other: Point3D) -> f64 {
         other.x * self.x + other.y * self.y + other.z * self.z
     }
-    fn height(height: f64) -> Self {
-        Self::new(0., 0., height)
+    fn with_height(mut self, height: f64) -> Point3D {
+        self.z = height;
+        self
+    }
+    fn height(&self) -> f64 {
+        self.z
     }
 
     fn normalize(self) -> Self {
@@ -429,28 +473,48 @@ impl Coords for Point3D {
         self.x = self.x + velocity.x * delta_t;
         self.y = self.y + velocity.y * delta_t;
         self.z = self.z + velocity.z * delta_t;
-        if self.x > dim.x || self.x < 0. {
-            self.x = self.x.min(dim.x).max(0.);
-            velocity.x = -velocity.x;
-        }
-        if self.y > dim.y || self.y < 0. {
-            self.y = self.y.min(dim.y).max(0.);
-            velocity.y = -velocity.y;
-        }
-        if self.z > dim.z {
-            self.z = dim.z;
-            velocity.z = -velocity.z;
-            return 293.15;
-        }
-        if self.z < 0. {
-            self.z = 0.;
-            velocity.z = 0.;
-            return 293.15;
-        }
+        // if self.x > dim.x || self.x < 0. {
+        //     self.x = self.x.min(dim.x).max(0.);
+        //     velocity.x = -velocity.x;
+        // }
+        // if self.y > dim.y || self.y < 0. {
+        //     self.y = self.y.min(dim.y).max(0.);
+        //     velocity.y = -velocity.y;
+        // }
+        // if self.z > dim.z {
+        //     self.z = dim.z;
+        //     velocity.z = -velocity.z;
+        //     return 293.15;
+        // }
+        // if self.z < 0. {
+        //     self.z = 0.;
+        //     velocity.z = 0.;
+        //     return 293.15;
+        // }
         temperature
+    }
+    fn proj(&self) -> Vec<Self> {
+        vec![
+            Point3D::new(0., self.y, self.z),
+            Point3D::new(self.x, 0., self.z),
+            Point3D::new(self.x, self.y, 0.),
+        ]
+    }
+    fn apply(&self, func: Box<dyn Fn(f64) -> f64>) -> Self {
+        Point3D::new(func(self.x), func(self.y), func(self.z))
     }
 }
 
+impl std::fmt::Display for Point3D {
+    // This trait requires `fmt` with this exact signature.
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        // Write strictly the first element into the supplied output
+        // stream: `f`. Returns `fmt::Result` which indicates whether the
+        // operation succeeded or failed. Note that `write!` uses syntax which
+        // is very similar to `println!`.
+        write!(f, "{}, {}, {}", self.x, self.y, self.z)
+    }
+}
 impl std::ops::Add for Point3D {
     type Output = Point3D;
 
@@ -483,9 +547,13 @@ impl std::ops::Sub for Point3D {
     }
 }
 
-impl Into<(u64, u64, u64)> for Point3D {
-    fn into(self) -> (u64, u64, u64) {
-        (self.x as u64, self.y as u64, self.z as u64)
+impl Into<(i64, i64, i64)> for Point3D {
+    fn into(self) -> (i64, i64, i64) {
+        (
+            self.x.floor() as i64,
+            self.y.floor() as i64,
+            self.z.floor() as i64,
+        )
     }
 }
 
@@ -557,6 +625,102 @@ impl Poly6Kernel for Point3D {
     }
 }
 
+impl CubicSplineKernel for Point3D {
+    fn cubic_coeff(h: f64) -> f64 {
+        PI.recip() * h.powi(-3)
+    }
+    fn cubic(&self, h: f64, point: Point3D) -> f64 {
+        let support = h / 2.;
+        let dist = self.clone() - point;
+        let q = dist.mag() / support;
+        Self::cubic_coeff(support)
+            * if q > 2. {
+                0.
+            } else if q > 1. {
+                0.25 * (2. - q).powi(3)
+            } else {
+                1. - 1.5 * q.powi(2) + 0.75 * q.powi(3)
+            }
+    }
+
+    fn grad_cubic(&self, h: f64, point: Point3D) -> Point3D {
+        let support = h / 2.;
+        let dist = self.clone() - point;
+        let diff = dist.mag();
+        let q = diff / support;
+        if diff == 0. {
+            return Point3D::default();
+        }
+        dist * Self::cubic_coeff(support)
+            * (support * diff).recip()
+            * if q > 2. {
+                0.
+            } else if q > 1. {
+                -0.75 * (2. - q).powi(2)
+            } else {
+                -3. * q + 2.25 * q.powi(2)
+            }
+    }
+
+    fn laplace_cubic(&self, h: f64, point: Point3D) -> f64 {
+        let support = h / 2.;
+        let dist = self.clone() - point;
+        let diff = dist.mag();
+        if diff == 0. {
+            return 0.;
+        }
+        let q = diff / support;
+        Self::cubic_coeff(support)
+            * if q > 2. {
+                0.
+            } else if q > 1. {
+                3. * (-2. * (diff * support).recip() + 3. * support.powi(-2)
+                    - diff * support.powi(-3))
+            } else {
+                -9. * support.powi(-2) + 9. * diff * support.powi(-3)
+            }
+    }
+}
+
+impl QuinticSplineKernel for Point3D {
+    fn quintic_coeff(h: f64) -> f64 {
+        (120. * PI).recip() * h.powi(-3)
+    }
+    fn quintic(&self, h: f64, point: Point3D) -> f64 {
+        let support = h / 3.;
+        let dist = self.clone() - point;
+        let q = dist.mag() / support;
+        Self::quintic_coeff(support)
+            * (if q < 3. { (3. - q).powi(5) } else { 0. }
+                + if q < 2. { -6. * (2. - q).powi(5) } else { 0. }
+                + if q < 1. { 15. * (1. - q).powi(5) } else { 0. })
+    }
+
+    fn grad_quintic(&self, h: f64, point: Point3D) -> Point3D {
+        let support = h / 3.;
+        let dist = self.clone() - point;
+        let diff = dist.mag();
+        if diff == 0. {
+            return Point3D::default();
+        }
+        let q = diff / support;
+        dist * (Self::quintic_coeff(support)
+            * (support * diff).recip()
+            * (if q < 3. { -5. * (3. - q).powi(4) } else { 0. }
+                + if q < 2. { 30. * (2. - q).powi(4) } else { 0. }
+                + if q < 1. { -75. * (1. - q).powi(4) } else { 0. }))
+    }
+
+    fn laplace_quintic(&self, h: f64, point: Point3D) -> f64 {
+        let dist = self.clone() - point;
+        let squared_diff = h.powi(2) - dist.squared_mag();
+        if squared_diff < 0. {
+            return 0.;
+        }
+        -6. * squared_diff * (squared_diff * 2. - 4. * dist.squared_mag()) * Self::quintic_coeff(h)
+    }
+}
+
 impl SpikyKernel for Point3D {
     fn spiky_coeff(h: f64) -> f64 {
         15. / PI * h.powi(-6)
@@ -593,7 +757,7 @@ impl ViscosityKernel for Point3D {
     fn visc(&self, h: f64, point: Self) -> f64 {
         let dist_point = self.clone() - point;
         let dist = dist_point.mag();
-        if dist > h {
+        if dist > h || dist == 0. {
             return 0.;
         }
 
@@ -627,12 +791,12 @@ pub enum Fluid {
 
 impl Fluid {
     const WATER_BENZYL_TENSION: f64 = 0.03297;
-    const WATER_VISCOSITY: f64 = 1.12189;
+    const WATER_VISCOSITY: f64 = 1.12189e-3;
     const WATER_DIFFUSIVITY: f64 = 1.69e-7;
     const WATER_DENSITY: f64 = 1034.;
     const WATER_THERMAL_EXPANSION: f64 = 3.09e-4;
     const WATER_MOLAR_MASS: f64 = 1.8015e-2;
-    const BENZYL_VISCOSITY: f64 = 5.7684;
+    const BENZYL_VISCOSITY: f64 = 5.7684e-3;
     const BENZYL_DIFFUSIVITY: f64 = 6.912e-7;
     const BENZYL_DENSITY: f64 = 1030.;
     const BENZYL_THERMAL_EXPANSION: f64 = 7.63e-4;
@@ -683,6 +847,13 @@ impl Fluid {
         }
     }
 
+    pub fn disp(&self) -> &str {
+        match self {
+            Fluid::Saltwater => "Salt Water",
+            Fluid::BenzylAlcohol => "Benzyl Alcohol",
+        }
+    }
+
     pub fn simulation_color(&self) -> Point3<f32> {
         match self {
             Fluid::Saltwater => Point3::new(1., 0., 0.),
@@ -700,6 +871,14 @@ impl Fluid {
                 Fluid::BENZYL_DENSITY
                     / ((temperature - 313.15) * Fluid::BENZYL_THERMAL_EXPANSION + 1.)
             }
+        }
+    }
+}
+impl std::fmt::Display for Fluid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fluid::Saltwater => write!(f, "Salt Water"),
+            Fluid::BenzylAlcohol => write!(f, "Benzyl Alcohol"),
         }
     }
 }
