@@ -470,24 +470,25 @@ impl Coords for Point3D {
         dim: &Self,
         delta_t: f64,
     ) -> f64 {
+        let margin: f64 = 0.001;
         self.x = self.x + velocity.x * delta_t;
         self.y = self.y + velocity.y * delta_t;
         self.z = self.z + velocity.z * delta_t;
-        // if self.x > dim.x || self.x < 0. {
-        //     self.x = self.x.min(dim.x).max(0.);
-        //     velocity.x = -velocity.x;
+        // if self.x > dim.x - margin || self.x < margin {
+        //     self.x = self.x.min(dim.x - margin).max(margin);
+        //     velocity.x = 0.;
         // }
-        // if self.y > dim.y || self.y < 0. {
-        //     self.y = self.y.min(dim.y).max(0.);
-        //     velocity.y = -velocity.y;
+        // if self.y > dim.y - margin || self.y < margin {
+        //     self.y = self.y.min(dim.y - margin).max(margin);
+        //     velocity.y = 0.;
         // }
-        // if self.z > dim.z {
-        //     self.z = dim.z;
-        //     velocity.z = -velocity.z;
+        // if self.z > dim.z - margin {
+        //     self.z = dim.z - margin;
+        //     velocity.z = 0.;
         //     return 293.15;
         // }
-        // if self.z < 0. {
-        //     self.z = 0.;
+        // if self.z < margin {
+        //     self.z = margin;
         //     velocity.z = 0.;
         //     return 293.15;
         // }

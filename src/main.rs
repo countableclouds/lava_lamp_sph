@@ -22,11 +22,11 @@ use na::Point3;
 const ROOM_TEMPERATURE: f64 = 293.15;
 const MAP_SCALE: f32 = 1000.;
 const PARTICLES_UPPER_BOUND: usize = 12000;
-const NUM_PARTICLES: usize = 10115;
+const NUM_PARTICLES: usize = 13000;
 const DIM: Point3D = Point3D {
-    x: 0.14605,
-    y: 0.14605,
-    z: 0.29845,
+    x: 0.15005,
+    y: 0.15005,
+    z: 0.30245,
 };
 fn gen_points(dim: &Point, num_particles: u64) -> Vec<Point> {
     let length = (-(dim.squared_mag() + dim.area() * (4. * (num_particles as f64) - 2.)).sqrt()
@@ -155,19 +155,19 @@ fn main() {
 
     // let points = gen_points_grid(&DIM, PARTICLES_UPPER_BOUND as u64, &mut rng);
 
-    // let mut points = Vec::new();
-    // let contents = fs::read_to_string("particles/particle_2000")
-    //     .expect("Something went wrong reading the file");
-    // let particle_positions = contents.split("\n");
+    let mut points = Vec::new();
+    let contents = fs::read_to_string("particles/particle_perfect_boundary") //for particle without boundary, make the radius 2. and the boundary mass 1300. With large boundary needs radius 2. and boundary mass 2000., and 0.95 factor on the densities
+        .expect("Something went wrong reading the file");
+    let particle_positions = contents.split("\n");
 
-    // for elem in particle_positions {
-    //     let mut coord = elem.split(", ");
-    //     points.push(Point3D {
-    //         x: f64::from_str(coord.next().unwrap()).unwrap(),
-    //         y: f64::from_str(coord.next().unwrap()).unwrap(),
-    //         z: f64::from_str(coord.next().unwrap()).unwrap(),
-    //     })
-    // }
+    for elem in particle_positions {
+        let mut coord = elem.split(", ");
+        points.push(Point3D {
+            x: f64::from_str(coord.next().unwrap()).unwrap(),
+            y: f64::from_str(coord.next().unwrap()).unwrap(),
+            z: f64::from_str(coord.next().unwrap()).unwrap(),
+        })
+    }
 
     let mut window = Window::new("Simulation! 😎");
     let particle_density = DIM.volume() / NUM_PARTICLES as f64;
@@ -179,6 +179,7 @@ fn main() {
             Particle::<Point3D>::new(
                 position,
                 particle_density
+                    * 1.
                     * if i < (NUM_PARTICLES * 3 / 4) {
                         Fluid::Saltwater.density(ROOM_TEMPERATURE)
                     } else {
@@ -205,13 +206,13 @@ fn main() {
 
     let mut map = Map::new(
         particles,
-        particle_density * 1000.,
+        particle_density * 1300.,
         particle_density.cbrt() * 2.,
         DIM,
         -0.,
     );
     println!("RADIUS: {:.8}", particle_density.cbrt() * 2.);
-    println!("BOUNDARY MASS: {:.8}", particle_density * 1200.);
+    println!("BOUNDARY MASS: {:.8}", particle_density * 5000.);
     let mut last_time: Instant = Instant::now();
     let mut time_elapsed = 0.;
     let mut real_time_elapsed = 0.;
@@ -226,7 +227,7 @@ fn main() {
         (DIM * MAP_SCALE as f64 / 2. + Point3D::new(0., -0.35 * MAP_SCALE as f64, 0.)).na_point();
     let mut first_person = FirstPerson::new(eye, (DIM * MAP_SCALE as f64 / 2.).na_point());
     let mut cubes: Vec<SceneNode> = vec![];
-    let delta_t = (10. as f64).recip();
+    let delta_t = (50. as f64).recip();
     while window.render_with_camera(&mut first_person) {
         for cube in &mut cubes {
             window.remove_node(cube);
@@ -267,6 +268,19 @@ fn main() {
         if i > 0 {
             map.update(delta_t)
         };
+        let mut count = 0;
+        for &particle in &map.particles {
+            if particle.position.x < DIM.x - 0.02
+                && particle.position.y < DIM.y - 0.02
+                && particle.position.z < DIM.z - 0.02
+                && particle.position.x > 0.02
+                && particle.position.y > 0.02
+                && particle.position.z > 0.02
+            {
+                count += 1
+            }
+        }
+        println!("THE COUNT: {}", count);
 
         // assert!(1 == 0);
         let real_delta_t = last_time.elapsed().as_secs_f64();

@@ -12,9 +12,11 @@ pub struct Map<T: Coords + Copy> {
     pub gravity: f64,
 }
 
-pub const TEST_NUM: usize = 7683;
+pub const TEST_NUM: usize = 8782; //2223; // ;
 const PRESSURE_FACTOR: f64 = 1.;
-const VELOCITY_FACTOR: f64 = 1.;
+const MASS_FACTOR: f64 = 1.;
+const checker: bool = false;
+const error_checker: bool = false;
 
 impl<T> Map<T>
 where
@@ -67,8 +69,9 @@ where
     pub fn update_density(&self, i: usize, particle: &Particle<T>) -> Particle<T> {
         let mut density = 0.;
         let mut point_count = 0;
-        // if particle.position.height() < 0.001 && particle.position.height() > 0. {
+        // if particle.position.height() < 0. {
         //     println!("{}", i);
+        //     assert!(1 == 0);
         // }
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
@@ -96,11 +99,13 @@ where
         }
         let mut boundary_density = 0.;
         for boundary_particle in particle.position.proj() {
-            boundary_density +=
-                self.boundary_mass * particle.position.cubic(self.radius, boundary_particle);
+            boundary_density += self.boundary_mass
+                * MASS_FACTOR
+                * particle.position.cubic(self.radius, boundary_particle);
         }
         for boundary_particle in (self.dim - particle.position).proj() {
             boundary_density += self.boundary_mass
+                * MASS_FACTOR
                 * particle
                     .position
                     .cubic(self.radius, self.dim - boundary_particle);
@@ -138,7 +143,7 @@ where
                         * particle.fluid_type.color(other_particle.fluid_type)
                         * particle
                             .position
-                            .laplace_cubic(self.radius, other_particle.position);
+                            .laplace_quintic(self.radius, other_particle.position);
 
                     water_benzyl_normal += particle
                         .position
@@ -216,14 +221,14 @@ where
                     .position
                     .grad_cubic(self.radius, boundary_particle)
                     .dot(inverse_densities[i])
-                    * (self.boundary_mass * delta_t.powi(2))
+                    * (self.boundary_mass * MASS_FACTOR * delta_t.powi(2))
             }
             for boundary_particle in (self.dim - particle.position).proj() {
                 diagonal[i] -= particle
                     .position
                     .grad_cubic(self.radius, self.dim - boundary_particle)
                     .dot(inverse_densities[i])
-                    * (self.boundary_mass * delta_t.powi(2));
+                    * (self.boundary_mass * MASS_FACTOR * delta_t.powi(2));
             }
         }
         diagonal
@@ -255,7 +260,7 @@ where
                     .position
                     .grad_cubic(self.radius, boundary_particle)
                     .dot(particle.velocity)
-                    * (VELOCITY_FACTOR * self.boundary_mass * delta_t);
+                    * (MASS_FACTOR * self.boundary_mass * delta_t);
                 if i == TEST_NUM {
                     println!("Boundary density diff thing: {}", density_diff[i]);
                     // println!(
@@ -271,7 +276,7 @@ where
                     .position
                     .grad_cubic(self.radius, self.dim - boundary_particle)
                     .dot(particle.velocity)
-                    * (VELOCITY_FACTOR * self.boundary_mass * delta_t);
+                    * (MASS_FACTOR * self.boundary_mass * delta_t);
             }
         }
         density_diff
@@ -298,6 +303,24 @@ where
                             * (-other_particle.mass
                                 * (pressures[i] * particle.density.powi(-2)
                                     + pressures[*j] * other_particle.density.powi(-2)));
+                        if i == TEST_NUM
+                            && checker
+                            && false
+                            && particle
+                                .position
+                                .grad_cubic(self.radius, other_particle.position)
+                                != T::default()
+                            && pressures[*j] != 0.
+                        {
+                            println!(
+                                "Bordering Pressure: {}, Position: {}, Index: {}, Density: {}",
+                                pressures[*j],
+                                other_particle.position,
+                                j,
+                                self.particles[*j].density
+                            );
+                            println!("{}", accelerations[i]);
+                        }
                     }
                 }
             }
@@ -307,6 +330,9 @@ where
                         * PRESSURE_FACTOR
                         * pressures[i]
                         * particle.density.powi(-2));
+                if TEST_NUM == i && checker {
+                    println!("{}", accelerations[i]);
+                }
             }
             for boundary_particle in (self.dim - particle.position).proj() {
                 accelerations[i] += particle
@@ -316,6 +342,9 @@ where
                         * PRESSURE_FACTOR
                         * pressures[i]
                         * particle.density.powi(-2));
+                if TEST_NUM == i && checker {
+                    println!("{}", accelerations[i]);
+                }
             }
         }
 
@@ -323,7 +352,7 @@ where
     }
 
     pub fn update_pressure_velocity(&mut self, delta_t: f64) {
-        let num_iter: u64 = 25;
+        let num_iter: u64 = 15;
         let relaxation_coeff = 0.5;
         let mut pressures: [f64; NUM_PARTICLES] = [0.; NUM_PARTICLES];
 
@@ -335,7 +364,7 @@ where
         h.sort_by(|a, b| a.partial_cmp(b).unwrap());
         println!(
             "Quantiles: {:.8} {:.8} {:.8} {:.8} {:.8} {:.8} {:.8} {:.8} {:.8} {:.8} {:.8}",
-            h[0 * h.len() / 10],
+            h[0],
             h[1 * h.len() / 10],
             h[2 * h.len() / 10],
             h[3 * h.len() / 10],
@@ -373,12 +402,13 @@ where
             h.iter().map(|(_, j)| j).sum::<f64>() / h.len() as f64
         );
         println!(
-            "Location of min particle: {}",
-            self.particles[h[0].0].position
+            "Location of min particle: {}, index: {}",
+            self.particles[h[0].0].position, h[0].0
         );
         println!(
-            "Location of max particle: {}",
-            self.particles[h[h.len() - 1].0].position
+            "Location of max particle: {}, index: {}",
+            self.particles[h[h.len() - 1].0].position,
+            h[h.len() - 1].0
         );
         println!(
             "Offset (positive means we want denser): {:.8}",
@@ -417,48 +447,68 @@ where
                         }
                     }
                 }
-                // if i == TEST_NUM {
-                //     println!(
-                //         "Test Particles Velocity: {}",
-                //         self.particles[TEST_NUM].velocity
-                //     );
-                // }
-                // if i == TEST_NUM {
-                //     println!(
-                //         "Test Particles Pressure Acceleration: {}",
-                //         pressure_accelerations[TEST_NUM]
-                //     );
-                // }
+                if i == TEST_NUM && checker {
+                    println!(
+                        "Test Particles Velocity: {}",
+                        self.particles[TEST_NUM].velocity
+                    );
+                    println!(
+                        "Test Particles Pressure Acceleration: {}",
+                        pressure_accelerations[TEST_NUM]
+                    );
+                    println!("Test Particles Pressure : {}", pressures[TEST_NUM]);
+                }
                 for boundary_particle in particle.position.proj() {
                     image[i] += particle
                         .position
                         .grad_cubic(self.radius, boundary_particle)
                         .dot(pressure_accelerations[i])
-                        * (self.boundary_mass * delta_t.powi(2));
+                        * (self.boundary_mass * MASS_FACTOR * delta_t.powi(2));
                 }
                 for boundary_particle in (self.dim - particle.position).proj() {
                     image[i] += particle
                         .position
                         .grad_cubic(self.radius, self.dim - boundary_particle)
                         .dot(pressure_accelerations[i])
-                        * (self.boundary_mass * delta_t.powi(2));
+                        * (self.boundary_mass * MASS_FACTOR * delta_t.powi(2));
                 }
 
                 pressures[i] += relaxation_coeff * (density_diff[i] - image[i]) / diagonal[i];
+                if i == TEST_NUM {
+                    println!(
+                        "Density Difference: {}, Image: {}, Diagonal: {}",
+                        density_diff[i], image[i], diagonal[i]
+                    );
+                }
+                // if image[TEST_NUM] > density_diff[TEST_NUM] {
+                //     println!("{}", i);
+                //     assert!(1 == 0);
+                // }
+                // if image[i] > density_diff[i].max(0.) + 10000. {
+                //     println!("{}", i);
+                //     assert!(1 == 0);
+                // }
+
                 if pressures[i] < 0. {
                     count += 1;
                 }
 
+                // pressures[i] = (0.29845 - self.particles[i].position.height()) * 100.;
                 pressures[i] = pressures[i].max(0.);
 
                 // if i == TEST_NUM {
                 //     println!("Pressure: {}", pressures[i]);
-                //     println!("Image: {}", image[i]);
+                //     println!("Image: {}", image[i]);x
                 //     println!("Height: {}", self.particles[i].position.height());
                 // }
-                // if i == TEST_NUM {
-                //     pressures[i] = 50.;
-                // } else {
+                if error_checker {
+                    if i == TEST_NUM {
+                        pressures[i] = 1.;
+                    } else {
+                        pressures[i] = 1.;
+                    }
+                }
+                // if i != TEST_NUM {
                 //     pressures[i] = 0.;
                 // }
             }
@@ -479,12 +529,15 @@ where
             for i in 0..image.len() {
                 image_average += image[i].abs() / self.particles[i].expected_density();
             }
-            // println!(
-            //     "Density Differences: {:?}, {:?}, {:?}",
-            //     image[TEST_NUM] + self.particles[TEST_NUM].density,
-            //     pressures[TEST_NUM],
-            //     image[TEST_NUM]
-            // );
+            if error_checker {
+                println!(
+                    "Density Differences: {:?}, {:?}, {:?}",
+                    image[TEST_NUM] + self.particles[TEST_NUM].density,
+                    pressures[TEST_NUM],
+                    image[TEST_NUM]
+                );
+            }
+
             if j == 0 || j == num_iter - 1 || true {
                 println!("Error Percentage: {:?}, {}", error / image.len() as f64, j);
             }
