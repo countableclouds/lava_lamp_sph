@@ -63,51 +63,55 @@ pub trait CubicSplineKernel {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Particle<T: Copy> {
     pub position: T,
-    pub velocity: T,
-    pub density: f64,
-    pub mass: f64,
-    pub temperature: f64,
-    pub fluid_type: Fluid,
+    pub velocity: Option<T>,
+    pub density: Option<f64>,
+    pub mass: Option<f64>,
+    pub temperature: Option<f64>,
+    pub fluid_type: Option<Fluid>,
 }
 
 impl<T: Copy + Coords + Default> Particle<T> {
     pub fn new(position: T, mass: f64, temperature: f64, fluid_type: Fluid) -> Self {
         Particle {
             position,
-            velocity: T::default(),
-            density: 0.,
-            mass,
-            temperature,
-            fluid_type,
+            velocity: Some(T::default()),
+            density: Some(0.),
+            mass: Some(mass),
+            temperature: Some(temperature),
+            fluid_type: Some(fluid_type),
         }
     }
     pub fn with_density(mut self, density: f64) -> Self {
-        self.density = density;
+        self.density = Some(density);
         self
     }
     pub fn with_temperature(mut self, temperature: f64) -> Self {
-        self.temperature = temperature;
+        self.temperature = Some(temperature);
         self
     }
     pub fn with_velocity(mut self, velocity: T) -> Self {
-        self.velocity = velocity;
+        self.velocity = Some(velocity);
         self
     }
     pub fn expected_density(&self) -> f64 {
-        self.fluid_type.density(self.temperature)
+        self.fluid_type.unwrap().density(self.temperature.unwrap())
     }
 
     pub fn delta_density(&self) -> f64 {
-        self.density - self.expected_density()
+        self.density.unwrap() - self.expected_density()
     }
 
     pub fn volume(&self) -> f64 {
-        self.mass * self.density.recip()
+        self.mass.unwrap() * self.density.unwrap().recip()
     }
     pub fn control_update(mut self, dim: T, delta_t: f64) -> Self {
         // self.temperature =
-        self.position
-            .control_update(&mut self.velocity, self.temperature, &dim, delta_t);
+        self.position.control_update(
+            &mut self.velocity.unwrap(),
+            self.temperature.unwrap(),
+            &dim,
+            delta_t,
+        );
         self
     }
 }
@@ -474,24 +478,24 @@ impl Coords for Point3D {
         self.x = self.x + velocity.x * delta_t;
         self.y = self.y + velocity.y * delta_t;
         self.z = self.z + velocity.z * delta_t;
-        // if self.x > dim.x - margin || self.x < margin {
-        //     self.x = self.x.min(dim.x - margin).max(margin);
-        //     velocity.x = 0.;
-        // }
-        // if self.y > dim.y - margin || self.y < margin {
-        //     self.y = self.y.min(dim.y - margin).max(margin);
-        //     velocity.y = 0.;
-        // }
-        // if self.z > dim.z - margin {
-        //     self.z = dim.z - margin;
-        //     velocity.z = 0.;
-        //     return 293.15;
-        // }
-        // if self.z < margin {
-        //     self.z = margin;
-        //     velocity.z = 0.;
-        //     return 293.15;
-        // }
+        if self.x > dim.x - margin || self.x < margin {
+            self.x = self.x.min(dim.x - margin).max(margin);
+            velocity.x = 0.;
+        }
+        if self.y > dim.y - margin || self.y < margin {
+            self.y = self.y.min(dim.y - margin).max(margin);
+            velocity.y = 0.;
+        }
+        if self.z > dim.z - margin {
+            self.z = dim.z - margin;
+            velocity.z = 0.;
+            return 293.15;
+        }
+        if self.z < margin {
+            self.z = margin;
+            velocity.z = 0.;
+            return 293.15;
+        }
         temperature
     }
     fn proj(&self) -> Vec<Self> {

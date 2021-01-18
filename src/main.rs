@@ -21,12 +21,12 @@ use na::Point3;
 
 const ROOM_TEMPERATURE: f64 = 293.15;
 const MAP_SCALE: f32 = 1000.;
-const PARTICLES_UPPER_BOUND: usize = 12000;
+const NUM_BOUNDARY_PARTICLES: usize = 13000;
 const NUM_PARTICLES: usize = 13000;
 const DIM: Point3D = Point3D {
-    x: 0.15005,
-    y: 0.15005,
-    z: 0.30245,
+    x: 0.14605,
+    y: 0.14605,
+    z: 0.29845,
 };
 fn gen_points(dim: &Point, num_particles: u64) -> Vec<Point> {
     let length = (-(dim.squared_mag() + dim.area() * (4. * (num_particles as f64) - 2.)).sqrt()
@@ -162,11 +162,13 @@ fn main() {
 
     for elem in particle_positions {
         let mut coord = elem.split(", ");
-        points.push(Point3D {
-            x: f64::from_str(coord.next().unwrap()).unwrap(),
-            y: f64::from_str(coord.next().unwrap()).unwrap(),
-            z: f64::from_str(coord.next().unwrap()).unwrap(),
-        })
+        let temp_point = Point3D {
+            x: f64::from_str(coord.next().unwrap()).unwrap()-0.02,
+            y: f64::from_str(coord.next().unwrap()).unwrap()-0.02,
+            z: f64::from_str(coord.next().unwrap()).unwrap()-0.02,
+        };
+        if temp_point.x >=0. && temp_point.y >=0. && temp_point.z >=0. &&temp_point.x <=DIM.x. &&temp_point.x >=0.&&temp_point.x >=0.
+        points.push()
     }
 
     let mut window = Window::new("Simulation! 😎");
@@ -237,7 +239,7 @@ fn main() {
             cubes.push(window.add_cube(0.001 * MAP_SCALE, 0.001 * MAP_SCALE, 0.001 * MAP_SCALE));
             let cube = cubes.get_mut(j).unwrap();
 
-            let color = particle.fluid_type.simulation_color();
+            let color = particle.fluid_type.unwrap().simulation_color();
             cube.set_color(color.x, color.y, color.z);
             if j == TEST_NUM {
                 cube.set_color(0., 0., 0.);

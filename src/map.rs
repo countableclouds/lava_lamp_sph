@@ -76,10 +76,13 @@ where
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
                 for (_, other_particle) in particles {
-                    if other_particle.mass
-                        * particle
-                            .position
-                            .cubic(self.radius, other_particle.position)
+                    if if let Some(mass) = other_particle.mass {
+                        mass
+                    } else {
+                        particle.mass.unwrap()
+                    } * particle
+                        .position
+                        .cubic(self.radius, other_particle.position)
                         > 0.
                     {
                         // if i == TEST_NUM {
@@ -87,10 +90,13 @@ where
                         // };
                         point_count += 1
                     }
-                    density += other_particle.mass
-                        * particle
-                            .position
-                            .cubic(self.radius, other_particle.position);
+                    density += if let Some(mass) = other_particle.mass {
+                        mass
+                    } else {
+                        particle.mass.unwrap()
+                    } * particle
+                        .position
+                        .cubic(self.radius, other_particle.position);
                 }
             }
         }
@@ -140,7 +146,13 @@ where
                     //         / 2.);
 
                     water_benzyl_curvature += other_particle.volume()
-                        * particle.fluid_type.color(other_particle.fluid_type)
+                        * particle.fluid_type.unwrap().color(
+                            if let Some(fluid) = other_particle.fluid_type {
+                                fluid
+                            } else {
+                                particle.fluid_type.unwrap()
+                            },
+                        )
                         * particle
                             .position
                             .laplace_quintic(self.radius, other_particle.position);
@@ -149,7 +161,13 @@ where
                         .position
                         .grad_cubic(self.radius, other_particle.position)
                         * (-other_particle.volume()
-                            * particle.fluid_type.color(other_particle.fluid_type));
+                            * particle.fluid_type.unwrap().color(
+                                if let Some(fluid) = other_particle.fluid_type {
+                                    fluid
+                                } else {
+                                    particle.fluid_type.unwrap()
+                                },
+                            ));
 
                     // temperature += particle.fluid_type.diffusivity()
                     //     * (other_particle.temperature - particle.temperature)
@@ -166,11 +184,11 @@ where
         //             * water_benzyl_curvature);
         // }
 
-        acceleration =
-            acceleration * particle.density.recip() + T::default().with_height(self.gravity);
-        temperature = particle.temperature + temperature * delta_t;
+        acceleration = acceleration * particle.density.unwrap().recip()
+            + T::default().with_height(self.gravity);
+        temperature = particle.temperature.unwrap() + temperature * delta_t;
         particle
-            .with_velocity(particle.velocity + acceleration * delta_t)
+            .with_velocity(particle.velocity.unwrap() + acceleration * delta_t)
             .with_temperature(temperature)
     }
     pub fn get_diagonal(&self, delta_t: f64) -> [f64; NUM_PARTICLES] {
@@ -183,19 +201,13 @@ where
                         inverse_densities[i] += particle
                             .position
                             .grad_cubic(self.radius, other_particle.position)
-                            * (other_particle.mass * particle.density.powi(-2));
+                            * (if let Some(mass) = other_particle.mass {
+                                mass
+                            } else {
+                                particle.mass.unwrap()
+                            } * particle.density.unwrap().powi(-2));
                     }
                 }
-            }
-            for boundary_particle in particle.position.proj() {
-                inverse_densities[i] += particle.position.grad_cubic(self.radius, boundary_particle)
-                    * (self.boundary_mass * PRESSURE_FACTOR * particle.density.powi(-2))
-            }
-            for boundary_particle in (self.dim - particle.position).proj() {
-                inverse_densities[i] += particle
-                    .position
-                    .grad_cubic(self.radius, self.dim - boundary_particle)
-                    * (self.boundary_mass * PRESSURE_FACTOR * particle.density.powi(-2))
             }
         }
         for (i, particle) in self.particles.iter().enumerate() {
@@ -207,28 +219,23 @@ where
                             .grad_cubic(self.radius, other_particle.position)
                             .dot(
                                 inverse_densities[i]
-                                    + particle
-                                        .position
-                                        .grad_cubic(self.radius, other_particle.position)
-                                        * (particle.mass * particle.density.powi(-2)),
+                                    + if !other_particle.mass.is_none() {
+                                        particle
+                                            .position
+                                            .grad_cubic(self.radius, other_particle.position)
+                                            * (particle.mass.unwrap()
+                                                * particle.density.unwrap().powi(-2))
+                                    } else {
+                                        T::default()
+                                    },
                             )
-                            * (other_particle.mass * delta_t.powi(2));
+                            * (if let Some(mass) = other_particle.mass {
+                                mass
+                            } else {
+                                particle.mass.unwrap()
+                            } * delta_t.powi(2));
                     }
                 }
-            }
-            for boundary_particle in particle.position.proj() {
-                diagonal[i] -= particle
-                    .position
-                    .grad_cubic(self.radius, boundary_particle)
-                    .dot(inverse_densities[i])
-                    * (self.boundary_mass * MASS_FACTOR * delta_t.powi(2))
-            }
-            for boundary_particle in (self.dim - particle.position).proj() {
-                diagonal[i] -= particle
-                    .position
-                    .grad_cubic(self.radius, self.dim - boundary_particle)
-                    .dot(inverse_densities[i])
-                    * (self.boundary_mass * MASS_FACTOR * delta_t.powi(2));
             }
         }
         diagonal
@@ -247,36 +254,21 @@ where
                         density_diff[i] -= particle
                             .position
                             .grad_cubic(self.radius, other_particle.position)
-                            .dot(particle.velocity - other_particle.velocity)
-                            * (other_particle.mass * delta_t);
+                            .dot(
+                                particle.velocity.unwrap()
+                                    - if let Some(velocity) = other_particle.velocity {
+                                        velocity
+                                    } else {
+                                        T::default()
+                                    },
+                            )
+                            * (if let Some(mass) = other_particle.mass {
+                                mass
+                            } else {
+                                particle.mass.unwrap()
+                            } * delta_t);
                     }
                 }
-            }
-            if i == TEST_NUM {
-                println!("Boundary density diff thing: {}", density_diff[i]);
-            }
-            for boundary_particle in particle.position.proj() {
-                density_diff[i] -= particle
-                    .position
-                    .grad_cubic(self.radius, boundary_particle)
-                    .dot(particle.velocity)
-                    * (MASS_FACTOR * self.boundary_mass * delta_t);
-                if i == TEST_NUM {
-                    println!("Boundary density diff thing: {}", density_diff[i]);
-                    // println!(
-                    //     "{}, {}, {}",
-                    //     particle.position,
-                    //     boundary_particle,
-                    //     self.radius / 2.
-                    // )
-                }
-            }
-            for boundary_particle in (self.dim - particle.position).proj() {
-                density_diff[i] -= particle
-                    .position
-                    .grad_cubic(self.radius, self.dim - boundary_particle)
-                    .dot(particle.velocity)
-                    * (MASS_FACTOR * self.boundary_mass * delta_t);
             }
         }
         density_diff
@@ -288,21 +280,28 @@ where
     ) -> [T; NUM_PARTICLES] {
         let mut accelerations: [T; NUM_PARTICLES] = [T::default(); NUM_PARTICLES];
         for (i, particle) in self.particles.iter().enumerate() {
-            if particle.density == 0. {
+            if particle.density.unwrap() == 0. {
                 continue;
             }
             for point in particle.position.along_axes(self.radius) {
                 if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
                     for (j, other_particle) in particles {
-                        if other_particle.density < 0.000000001 {
+                        if other_particle.density.unwrap() < 0.000000001 {
                             continue;
                         }
                         accelerations[i] += particle
                             .position
                             .grad_cubic(self.radius, other_particle.position)
-                            * (-other_particle.mass
-                                * (pressures[i] * particle.density.powi(-2)
-                                    + pressures[*j] * other_particle.density.powi(-2)));
+                            * (-if let Some(mass) = other_particle.mass {
+                                mass
+                            } else {
+                                particle.mass.unwrap()
+                            } * (pressures[i] * particle.density.unwrap().powi(-2)
+                                + if let Some(density) = other_particle.density {
+                                    pressures[*j] * density.powi(-2)
+                                } else {
+                                    0.
+                                }));
                         if i == TEST_NUM
                             && checker
                             && false
@@ -317,33 +316,11 @@ where
                                 pressures[*j],
                                 other_particle.position,
                                 j,
-                                self.particles[*j].density
+                                self.particles[*j].density.unwrap()
                             );
                             println!("{}", accelerations[i]);
                         }
                     }
-                }
-            }
-            for boundary_particle in particle.position.proj() {
-                accelerations[i] += particle.position.grad_cubic(self.radius, boundary_particle)
-                    * (-self.boundary_mass
-                        * PRESSURE_FACTOR
-                        * pressures[i]
-                        * particle.density.powi(-2));
-                if TEST_NUM == i && checker {
-                    println!("{}", accelerations[i]);
-                }
-            }
-            for boundary_particle in (self.dim - particle.position).proj() {
-                accelerations[i] += particle
-                    .position
-                    .grad_cubic(self.radius, self.dim - boundary_particle)
-                    * (-self.boundary_mass
-                        * PRESSURE_FACTOR
-                        * pressures[i]
-                        * particle.density.powi(-2));
-                if TEST_NUM == i && checker {
-                    println!("{}", accelerations[i]);
                 }
             }
         }
@@ -380,7 +357,7 @@ where
             .particles
             .iter()
             .enumerate()
-            .map(|(i, p)| (i, p.density))
+            .map(|(i, p)| (i, p.density.unwrap()))
             .collect();
         h.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         println!(
@@ -442,35 +419,32 @@ where
                             image[i] += particle
                                 .position
                                 .grad_cubic(self.radius, other_particle.position)
-                                .dot(pressure_accelerations[i] - pressure_accelerations[*j])
-                                * (other_particle.mass * delta_t.powi(2));
+                                .dot(
+                                    pressure_accelerations[i]
+                                        - if *j < NUM_PARTICLES {
+                                            pressure_accelerations[*j]
+                                        } else {
+                                            T::default()
+                                        },
+                                )
+                                * (if let Some(mass) = other_particle.mass {
+                                    mass
+                                } else {
+                                    particle.mass.unwrap()
+                                } * delta_t.powi(2));
                         }
                     }
                 }
                 if i == TEST_NUM && checker {
                     println!(
                         "Test Particles Velocity: {}",
-                        self.particles[TEST_NUM].velocity
+                        self.particles[TEST_NUM].velocity.unwrap()
                     );
                     println!(
                         "Test Particles Pressure Acceleration: {}",
                         pressure_accelerations[TEST_NUM]
                     );
                     println!("Test Particles Pressure : {}", pressures[TEST_NUM]);
-                }
-                for boundary_particle in particle.position.proj() {
-                    image[i] += particle
-                        .position
-                        .grad_cubic(self.radius, boundary_particle)
-                        .dot(pressure_accelerations[i])
-                        * (self.boundary_mass * MASS_FACTOR * delta_t.powi(2));
-                }
-                for boundary_particle in (self.dim - particle.position).proj() {
-                    image[i] += particle
-                        .position
-                        .grad_cubic(self.radius, self.dim - boundary_particle)
-                        .dot(pressure_accelerations[i])
-                        * (self.boundary_mass * MASS_FACTOR * delta_t.powi(2));
                 }
 
                 pressures[i] += relaxation_coeff * (density_diff[i] - image[i]) / diagonal[i];
@@ -532,7 +506,7 @@ where
             if error_checker {
                 println!(
                     "Density Differences: {:?}, {:?}, {:?}",
-                    image[TEST_NUM] + self.particles[TEST_NUM].density,
+                    image[TEST_NUM] + self.particles[TEST_NUM].density.unwrap(),
                     pressures[TEST_NUM],
                     image[TEST_NUM]
                 );
@@ -570,13 +544,14 @@ where
             .iter()
             .enumerate()
             .map(|(i, particle)| {
-                particle.with_velocity(particle.velocity + pressure_accelerations[i] * delta_t)
+                particle
+                    .with_velocity(particle.velocity.unwrap() + pressure_accelerations[i] * delta_t)
             })
             .collect::<Vec<Particle<T>>>()
             .as_slice()
             .try_into()
             .expect("Expected a Vec of a different length");
-        println!("Velocity: {}", self.particles[TEST_NUM].velocity);
+        println!("Velocity: {}", self.particles[TEST_NUM].velocity.unwrap());
     }
 
     pub fn update(&mut self, delta_t: f64) {
