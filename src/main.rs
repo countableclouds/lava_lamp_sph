@@ -23,6 +23,7 @@ const DIM: Point3D = Point3D {
     y: 0.14605,
     z: 0.29845,
 };
+const WRITE_TO_FILE: bool = false;
 
 fn gen_points_random(
     dim_lower: &Point3D,
@@ -58,9 +59,6 @@ fn disp_cube(window: &mut Window, vertices: [Point3<f32>; 8], color: Point3<f32>
 }
 fn main() {
     let mut rng = StdRng::seed_from_u64(2);
-    // let mut rng = Some(StdRng::seed_from_u64(2));
-
-    // let mut rng: Option<ThreadRng> = None;
 
     let mut points = gen_points_random(
         &Point3D::new(0., 0., DIM.z / 4.),
@@ -76,10 +74,8 @@ fn main() {
     );
     points.append(&mut benzyl_points);
 
-    // let points = gen_points_grid(&DIM, PARTICLES_UPPER_BOUND as u64, &mut rng);
-
     let mut points = Vec::new();
-    let contents = fs::read_to_string("particles/particle_updated_densities") //for particle without boundary, make the radius 2. and the boundary mass 1300. With large boundary needs radius 2. and boundary mass 2000., and 0.95 factor on the densities
+    let contents = fs::read_to_string("init_distros/dist_lava_lamp") //for particle without boundary, make the radius 2. and the boundary mass 1300. With large boundary needs radius 2. and boundary mass 2000., and 0.95 factor on the densities
         .expect("Something went wrong reading the file");
     let particle_positions = contents.split("\n");
 
@@ -134,6 +130,7 @@ fn main() {
         particle_density.cbrt() * 2.,
         DIM,
         -9.8,
+        0.05,
     );
     println!("RADIUS: {:.8}", particle_density.cbrt() * 2.);
     println!("BOUNDARY MASS: {:.8}", particle_density * 5000.);
@@ -161,7 +158,7 @@ fn main() {
 
     let mut cubes: Vec<SceneNode> = vec![];
     first_person.set_move_step(10.);
-    let delta_t = 0.012; //(10. as f64).recip();
+    let mut delta_t = 0.0087; //(10. as f64).recip();
     while window.render_with_camera(&mut first_person) {
         for cube in &mut cubes {
             window.remove_node(cube);
@@ -186,12 +183,25 @@ fn main() {
             cube.append_translation(&(particle.position * MAP_SCALE as f64).translation())
         }
         map.update(delta_t);
+        // delta_t = 0.026449456893745664;
+        println!("The change in time is: {}", delta_t);
         i += 1;
-        if i % 1 == 0 {
+        if i % 10 == 0 {
             println!(
                 "{} seconds have passed, real time {}.",
                 time_elapsed, real_time_elapsed
             );
+            if WRITE_TO_FILE {
+                let mut data: String = "".to_owned();
+                for &particle in &map.particles {
+                    data.push_str(&particle.position.to_string());
+                    data.push_str("\n");
+                }
+                data = data[..data.len() - 1].to_owned();
+
+                fs::write(format!("init_distros/dist_{}", i / 10), data)
+                    .expect("Unable to write file");
+            }
         }
         disp_cube(&mut window, vertices, Point3::new(0.0, 0.0, 0.0));
 
