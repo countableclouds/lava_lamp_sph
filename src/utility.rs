@@ -11,13 +11,7 @@ where
     fn with_height(self, height: f64) -> Self;
     fn height(&self) -> f64;
     fn normalize(self) -> Self;
-    fn control_update(
-        &mut self,
-        velocity: &mut Self,
-        temperature: f64,
-        dim: &Self,
-        delta_t: f64,
-    ) -> f64;
+    fn control_update(&mut self, velocity: &mut Self, dim: &Self, delta_t: f64);
     fn mag(&self) -> f64;
     fn squared_mag(&self) -> f64;
     fn dot(&self, other: Self) -> f64;
@@ -60,58 +54,80 @@ pub trait CubicSplineKernel {
     fn grad_cubic(&self, h: f64, point: Self) -> Self;
     fn laplace_cubic(&self, h: f64, point: Self) -> f64;
 }
+
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Particle<T: Copy> {
     pub position: T,
-    pub velocity: Option<T>,
-    pub density: Option<f64>,
-    pub mass: Option<f64>,
-    pub temperature: Option<f64>,
-    pub fluid_type: Option<Fluid>,
+    pub velocity: T,
+    pub density: f64,
+    pub mass: f64,
+    pub temperature: f64,
+    pub fluid_type: Fluid,
 }
 
 impl<T: Copy + Coords + Default> Particle<T> {
-    pub fn new(position: T, mass: f64, temperature: f64, fluid_type: Fluid) -> Self {
+    pub fn new(position: T, mass: f64, velocity: T, temperature: f64, fluid_type: Fluid) -> Self {
         Particle {
             position,
-            velocity: Some(T::default()),
-            density: Some(0.),
-            mass: Some(mass),
-            temperature: Some(temperature),
-            fluid_type: Some(fluid_type),
+            velocity,
+            density: 0.,
+            mass: mass,
+            temperature: temperature,
+            fluid_type: fluid_type,
         }
     }
     pub fn with_density(mut self, density: f64) -> Self {
-        self.density = Some(density);
+        self.density = density;
         self
     }
     pub fn with_temperature(mut self, temperature: f64) -> Self {
-        self.temperature = Some(temperature);
+        self.temperature = temperature;
         self
     }
     pub fn with_velocity(mut self, velocity: T) -> Self {
-        self.velocity = Some(velocity);
+        self.velocity = velocity;
         self
     }
-    pub fn expected_density(&self) -> f64 {
-        self.fluid_type.unwrap().density(self.temperature.unwrap())
+    pub fn rest_density(&self) -> f64 {
+        self.fluid_type.density(self.temperature)
     }
 
     pub fn delta_density(&self) -> f64 {
-        self.density.unwrap() - self.expected_density()
+        self.density - self.rest_density()
     }
 
     pub fn volume(&self) -> f64 {
-        self.mass.unwrap() * self.density.unwrap().recip()
+        self.mass / self.density
     }
+
     pub fn control_update(mut self, dim: T, delta_t: f64) -> Self {
         // self.temperature =
-        self.position.control_update(
-            &mut self.velocity.unwrap(),
-            self.temperature.unwrap(),
-            &dim,
-            delta_t,
-        );
+        self.position
+            .control_update(&mut self.velocity, &dim, delta_t);
+        self
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct BoundaryParticle<T: Copy> {
+    pub position: T,
+    pub volume: f64,
+    pub temperature: f64,
+}
+impl<T: Copy + Coords + Default> BoundaryParticle<T> {
+    pub fn new(position: T, temperature: f64) -> Self {
+        BoundaryParticle {
+            position,
+            volume: 0.,
+            temperature,
+        }
+    }
+    pub fn mass(&self, density: f64) -> f64 {
+        density * self.volume
+    }
+
+    pub fn with_volume(mut self, volume: f64) -> Self {
+        self.volume = volume;
         self
     }
 }
@@ -178,13 +194,7 @@ impl Coords for Point {
         self / self.mag()
     }
 
-    fn control_update(
-        &mut self,
-        velocity: &mut Point,
-        temperature: f64,
-        dim: &Self,
-        delta_t: f64,
-    ) -> f64 {
+    fn control_update(&mut self, velocity: &mut Point, dim: &Self, delta_t: f64) {
         self.x = self.x + velocity.x * delta_t;
         self.y = self.y + velocity.y * delta_t;
         if self.x > dim.x || self.x < 0. {
@@ -194,14 +204,11 @@ impl Coords for Point {
         if self.y > dim.y {
             self.y = dim.y;
             velocity.y = -velocity.y;
-            return 293.15;
         }
         if self.y < 0. {
             self.y = 0.;
             velocity.y = 0.;
-            return 293.15;
         }
-        temperature
     }
     fn proj(&self) -> Vec<Self> {
         vec![Point::new(0., self.y), Point::new(self.x, 0.)]
@@ -467,36 +474,27 @@ impl Coords for Point3D {
         self / self.mag()
     }
 
-    fn control_update(
-        &mut self,
-        velocity: &mut Point3D,
-        temperature: f64,
-        dim: &Self,
-        delta_t: f64,
-    ) -> f64 {
+    fn control_update(&mut self, velocity: &mut Point3D, dim: &Self, delta_t: f64) {
         let margin: f64 = 0.001;
         self.x = self.x + velocity.x * delta_t;
         self.y = self.y + velocity.y * delta_t;
         self.z = self.z + velocity.z * delta_t;
-        if self.x > dim.x - margin || self.x < margin {
-            self.x = self.x.min(dim.x - margin).max(margin);
-            velocity.x = 0.;
-        }
-        if self.y > dim.y - margin || self.y < margin {
-            self.y = self.y.min(dim.y - margin).max(margin);
-            velocity.y = 0.;
-        }
-        if self.z > dim.z - margin {
-            self.z = dim.z - margin;
-            velocity.z = 0.;
-            return 293.15;
-        }
-        if self.z < margin {
-            self.z = margin;
-            velocity.z = 0.;
-            return 293.15;
-        }
-        temperature
+        // if self.x > dim.x - margin || self.x < margin {
+        //     self.x = self.x.min(dim.x - margin).max(margin);
+        //     velocity.x = 0.;
+        // }
+        // if self.y > dim.y - margin || self.y < margin {
+        //     self.y = self.y.min(dim.y - margin).max(margin);
+        //     velocity.y = 0.;
+        // }
+        // if self.z > dim.z - margin {
+        //     self.z = dim.z - margin;
+        //     velocity.z = 0.;
+        // }
+        // if self.z < margin {
+        //     self.z = margin;
+        //     velocity.z = 0.;
+        // };
     }
     fn proj(&self) -> Vec<Self> {
         vec![
@@ -798,14 +796,12 @@ impl Fluid {
     const WATER_BENZYL_TENSION: f64 = 0.03297;
     const WATER_VISCOSITY: f64 = 1.12189e-3;
     const WATER_DIFFUSIVITY: f64 = 1.69e-7;
-    const WATER_DENSITY: f64 = 1034.;
+    const WATER_DENSITY: f64 = 1017.7;
     const WATER_THERMAL_EXPANSION: f64 = 3.09e-4;
-    const WATER_MOLAR_MASS: f64 = 1.8015e-2;
     const BENZYL_VISCOSITY: f64 = 5.7684e-3;
     const BENZYL_DIFFUSIVITY: f64 = 6.912e-7;
-    const BENZYL_DENSITY: f64 = 1030.;
+    const BENZYL_DENSITY: f64 = 1023.75;
     const BENZYL_THERMAL_EXPANSION: f64 = 7.63e-4;
-    const BENZYL_MOLAR_MASS: f64 = 1.0814e-1;
     /// Dynamic viscosity
     pub fn viscosity(&self) -> f64 {
         match self {
@@ -819,13 +815,7 @@ impl Fluid {
             Fluid::BenzylAlcohol => Fluid::BENZYL_DIFFUSIVITY,
         }
     }
-    // molar mass in kg/mol
-    pub fn molar_mass(&self) -> f64 {
-        match self {
-            Fluid::Saltwater => Fluid::WATER_MOLAR_MASS,
-            Fluid::BenzylAlcohol => Fluid::BENZYL_MOLAR_MASS,
-        }
-    }
+
     pub fn interfacial_tension(&self, fluid: Fluid) -> f64 {
         match self {
             Fluid::Saltwater => match fluid {
@@ -859,22 +849,39 @@ impl Fluid {
         }
     }
 
-    pub fn simulation_color(&self) -> Point3<f32> {
+    pub fn simulation_color(
+        &self,
+        temperature: f32,
+        min_temperature: f32,
+        max_temperature: f32,
+    ) -> Point3<f32> {
         match self {
-            Fluid::Saltwater => Point3::new(1., 0., 0.),
-            Fluid::BenzylAlcohol => Point3::new(0., 1., 1.),
+            Fluid::Saltwater => Point3::new(
+                (temperature - min_temperature) / (max_temperature - min_temperature),
+                1.,
+                0.,
+            ),
+            Fluid::BenzylAlcohol => Point3::new(
+                ((temperature - min_temperature) / (max_temperature - min_temperature))
+                    * (255. / 255.),
+                ((temperature - min_temperature) / (max_temperature - min_temperature))
+                    * (0. / 255.),
+                1. + ((temperature - min_temperature) / (max_temperature - min_temperature))
+                    * (0. / 255. - 1.),
+            ),
         }
     }
 
     pub fn density(&self, temperature: f64) -> f64 {
+        let temperature = 293.15;
         match self {
             Fluid::Saltwater => {
                 Fluid::WATER_DENSITY
-                    / ((temperature - 293.15) * Fluid::WATER_THERMAL_EXPANSION + 1.)
+                    / ((temperature - 288.55) * Fluid::WATER_THERMAL_EXPANSION + 1.)
             }
             Fluid::BenzylAlcohol => {
                 Fluid::BENZYL_DENSITY
-                    / ((temperature - 313.15) * Fluid::BENZYL_THERMAL_EXPANSION + 1.)
+                    / ((temperature - 289.85) * Fluid::BENZYL_THERMAL_EXPANSION + 1.)
             }
         }
     }

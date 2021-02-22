@@ -1,22 +1,22 @@
 use crate::utility::*;
-use crate::NUM_PARTICLES;
+use crate::{NUM_BOUNDARY_PARTICLES, NUM_PARTICLES};
 use rayon::prelude::*;
+use std::fs;
 use std::{cmp::Eq, collections::HashMap, convert::TryInto, fmt::Display, hash::Hash};
-
 pub struct Map<T: Coords + Copy> {
     pub particles: [Particle<T>; NUM_PARTICLES],
+    pub boundary_particles: [BoundaryParticle<T>; NUM_BOUNDARY_PARTICLES],
     pub dim: T,
     pub radius: f64,
     pub boundary_mass: f64,
     pub particle_map: HashMap<T::Key, Vec<(usize, Particle<T>)>>,
+    pub boundary_particle_map: HashMap<T::Key, Vec<BoundaryParticle<T>>>,
     pub gravity: f64,
+    pub pressures: [f64; NUM_PARTICLES],
+    pub cfl: f64,
 }
 
-pub const TEST_NUM: usize = 8782; //2223; // ;
-const PRESSURE_FACTOR: f64 = 1.;
-const MASS_FACTOR: f64 = 1.;
-const checker: bool = false;
-const error_checker: bool = false;
+pub const TEST_NUM: usize = 8489; //2223; // ;
 
 impl<T> Map<T>
 where
@@ -41,18 +41,24 @@ where
 {
     pub fn new(
         particles: [Particle<T>; NUM_PARTICLES],
+        boundary_particles: [BoundaryParticle<T>; NUM_BOUNDARY_PARTICLES],
         boundary_mass: f64,
         radius: f64,
         dim: T,
         gravity: f64,
+        cfl: f64,
     ) -> Self {
         Map {
             particles,
+            boundary_particles,
             dim,
             radius,
             boundary_mass,
             particle_map: HashMap::new(),
+            boundary_particle_map: HashMap::new(),
             gravity,
+            pressures: [0.; NUM_PARTICLES],
+            cfl,
         }
     }
     pub fn update_hashmap(&mut self) {
@@ -64,131 +70,162 @@ where
                 .or_insert(Vec::new()))
             .push((i, particle.clone()));
         }
+        self.boundary_particle_map.clear();
+        for (i, boundary_particle) in self.boundary_particles.iter().enumerate() {
+            (*self
+                .boundary_particle_map
+                .entry(boundary_particle.position.bin(self.radius))
+                .or_insert(Vec::new()))
+            .push(boundary_particle.clone());
+        }
     }
 
     pub fn update_density(&self, i: usize, particle: &Particle<T>) -> Particle<T> {
         let mut density = 0.;
         let mut point_count = 0;
-        // if particle.position.height() < 0. {
-        //     println!("{}", i);
-        //     assert!(1 == 0);
-        // }
+
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
-                for (_, other_particle) in particles {
-                    if if let Some(mass) = other_particle.mass {
-                        mass
-                    } else {
-                        particle.mass.unwrap()
-                    } * particle
-                        .position
-                        .cubic(self.radius, other_particle.position)
+                for (_, fluid_particle) in particles {
+                    if fluid_particle.mass
+                        * particle
+                            .position
+                            .cubic(self.radius, fluid_particle.position)
                         > 0.
                     {
-                        // if i == TEST_NUM {
-                        //     println!("{}", other_particle.position);
-                        // };
                         point_count += 1
                     }
-                    density += if let Some(mass) = other_particle.mass {
-                        mass
-                    } else {
-                        particle.mass.unwrap()
-                    } * particle
-                        .position
-                        .cubic(self.radius, other_particle.position);
+                    density += fluid_particle.mass
+                        * particle
+                            .position
+                            .cubic(self.radius, fluid_particle.position);
+                }
+            }
+
+            if let Some(boundary_particles) =
+                self.boundary_particle_map.get(&point.bin(self.radius))
+            {
+                for boundary_particle in boundary_particles {
+                    if particle.mass
+                        * particle
+                            .position
+                            .cubic(self.radius, boundary_particle.position)
+                        > 0.
+                    {
+                        point_count += 1
+                    }
+                    density += particle.mass
+                        * particle
+                            .position
+                            .cubic(self.radius, boundary_particle.position);
                 }
             }
         }
         if i == TEST_NUM {
             println!("Point count: {}", point_count);
         }
-        let mut boundary_density = 0.;
-        for boundary_particle in particle.position.proj() {
-            boundary_density += self.boundary_mass
-                * MASS_FACTOR
-                * particle.position.cubic(self.radius, boundary_particle);
-        }
-        for boundary_particle in (self.dim - particle.position).proj() {
-            boundary_density += self.boundary_mass
-                * MASS_FACTOR
-                * particle
-                    .position
-                    .cubic(self.radius, self.dim - boundary_particle);
-        }
-        if i == TEST_NUM {
-            println!("Boundary density: {}", boundary_density);
-        }
-        // if density + boundary_density < 900. {
-        //     println!(
-        //         "Position: {:?}, Density: {}, Boundary Density: {}, Number: {}",
-        //         particle.position, density, boundary_density, i
-        //     )
-        // }
-        particle.with_density(density + boundary_density)
+
+        particle.with_density(density)
     }
 
-    pub fn update_nonpressure_velocity(&self, particle: &Particle<T>, delta_t: f64) -> Particle<T> {
+    pub fn update_boundary_volume(
+        &self,
+        i: usize,
+        particle: &BoundaryParticle<T>,
+    ) -> BoundaryParticle<T> {
+        let mut volume = 0.;
+        for point in particle.position.along_axes(self.radius) {
+            if let Some(boundary_particles) =
+                self.boundary_particle_map.get(&point.bin(self.radius))
+            {
+                for boundary_particle in boundary_particles {
+                    volume += particle
+                        .position
+                        .cubic(self.radius, boundary_particle.position);
+                }
+            }
+        }
+
+        particle.with_volume(volume.recip())
+    }
+
+    pub fn update_nonpressure_velocity(
+        &self,
+        i: usize,
+        particle: &Particle<T>,
+        delta_t: f64,
+    ) -> Particle<T> {
         let mut acceleration = T::default();
         let mut water_benzyl_normal = T::default();
         let mut water_benzyl_curvature = 0.;
         let mut temperature = 0.;
-        // println!("{:?}", particle.density_disparity());
+        // if (self.dim.height() - particle.position.height()) < 0.05 {
+        //     factor = 100.;
+        // }
         for point in particle.position.along_axes(self.radius) {
             if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
-                for (_, other_particle) in particles {
-                    // acceleration += (other_particle.velocity - particle.velocity)
-                    //     * other_particle.volume()
-                    //     * (other_particle.fluid_type.viscosity() + particle.fluid_type.viscosity())
-                    //     * (particle
-                    //         .position
-                    //         .laplace_visc(self.radius, other_particle.position)
-                    //         / 2.);
+                for (_, fluid_particle) in particles {
+                    acceleration += (fluid_particle.velocity - particle.velocity)
+                        * (fluid_particle.volume() * fluid_particle.fluid_type.viscosity()
+                            + particle.fluid_type.viscosity()
+                                * (particle
+                                    .position
+                                    .laplace_cubic(self.radius, fluid_particle.position)
+                                    / 2.));
 
-                    water_benzyl_curvature += other_particle.volume()
-                        * particle.fluid_type.unwrap().color(
-                            if let Some(fluid) = other_particle.fluid_type {
-                                fluid
-                            } else {
-                                particle.fluid_type.unwrap()
-                            },
-                        )
+                    water_benzyl_curvature += fluid_particle.volume()
+                        * particle.fluid_type.color(fluid_particle.fluid_type)
                         * particle
                             .position
-                            .laplace_quintic(self.radius, other_particle.position);
+                            .laplace_cubic(self.radius, fluid_particle.position);
 
                     water_benzyl_normal += particle
                         .position
-                        .grad_cubic(self.radius, other_particle.position)
-                        * (-other_particle.volume()
-                            * particle.fluid_type.unwrap().color(
-                                if let Some(fluid) = other_particle.fluid_type {
-                                    fluid
-                                } else {
-                                    particle.fluid_type.unwrap()
-                                },
-                            ));
+                        .grad_cubic(self.radius, fluid_particle.position)
+                        * (-fluid_particle.volume()
+                            * particle.fluid_type.color(fluid_particle.fluid_type));
 
-                    // temperature += particle.fluid_type.diffusivity()
-                    //     * (other_particle.temperature - particle.temperature)
-                    //     * other_particle.volume()
-                    //     * particle
-                    //         .position
-                    //         .laplace_visc(self.radius, other_particle.position);
+                    temperature += if particle.fluid_type == fluid_particle.fluid_type {
+                        particle.fluid_type.diffusivity()
+                    } else {
+                        (particle.fluid_type.diffusivity()
+                            + fluid_particle.fluid_type.diffusivity())
+                            / 2.
+                    } * (fluid_particle.temperature - particle.temperature)
+                        * fluid_particle.volume()
+                        * particle
+                            .position
+                            .laplace_cubic(self.radius, fluid_particle.position);
+                }
+            }
+            if let Some(boundary_particles) =
+                self.boundary_particle_map.get(&point.bin(self.radius))
+            {
+                for boundary_particle in boundary_particles {
+                    temperature += particle.fluid_type.diffusivity()
+                        * (boundary_particle.temperature - particle.temperature)
+                        * boundary_particle.volume
+                        * particle
+                            .position
+                            .laplace_cubic(self.radius, boundary_particle.position);
                 }
             }
         }
+        // if i == TEST_NUM {
+        //     println!("{}", buoyancy);
+        // }
+
         // if water_benzyl_normal != T::default() {
         //     acceleration += water_benzyl_normal.normalize()
         //         * (Fluid::Saltwater.interfacial_tension(Fluid::BenzylAlcohol)
         //             * water_benzyl_curvature);
         // }
 
-        acceleration = acceleration * particle.density.unwrap().recip()
-            + T::default().with_height(self.gravity);
-        temperature = particle.temperature.unwrap() + temperature * delta_t;
+        acceleration =
+            acceleration * particle.density.recip() + T::default().with_height(self.gravity);
+        // temperature = particle.temperature + temperature * delta_t;
         particle
-            .with_velocity(particle.velocity.unwrap() + acceleration * delta_t)
+            .with_velocity(particle.velocity + acceleration * delta_t)
             .with_temperature(temperature)
     }
     pub fn get_diagonal(&self, delta_t: f64) -> [f64; NUM_PARTICLES] {
@@ -197,15 +234,22 @@ where
         for (i, particle) in self.particles.iter().enumerate() {
             for point in particle.position.along_axes(self.radius) {
                 if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
-                    for (_, other_particle) in particles {
+                    for (_, fluid_particle) in particles {
                         inverse_densities[i] += particle
                             .position
-                            .grad_cubic(self.radius, other_particle.position)
-                            * (if let Some(mass) = other_particle.mass {
-                                mass
-                            } else {
-                                particle.mass.unwrap()
-                            } * particle.density.unwrap().powi(-2));
+                            .grad_cubic(self.radius, fluid_particle.position)
+                            * (fluid_particle.mass * particle.density.powi(-2));
+                    }
+                }
+                if let Some(boundary_particles) =
+                    self.boundary_particle_map.get(&point.bin(self.radius))
+                {
+                    for boundary_particle in boundary_particles {
+                        inverse_densities[i] += boundary_particle
+                            .position
+                            .grad_cubic(self.radius, boundary_particle.position)
+                            * (boundary_particle.mass(particle.rest_density())
+                                * particle.density.powi(-2));
                     }
                 }
             }
@@ -213,27 +257,32 @@ where
         for (i, particle) in self.particles.iter().enumerate() {
             for point in particle.position.along_axes(self.radius) {
                 if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
-                    for (_, other_particle) in particles {
+                    for (_, fluid_particle) in particles {
                         diagonal[i] -= particle
                             .position
-                            .grad_cubic(self.radius, other_particle.position)
+                            .grad_cubic(self.radius, fluid_particle.position)
                             .dot(
                                 inverse_densities[i]
-                                    + if !other_particle.mass.is_none() {
-                                        particle
-                                            .position
-                                            .grad_cubic(self.radius, other_particle.position)
-                                            * (particle.mass.unwrap()
-                                                * particle.density.unwrap().powi(-2))
-                                    } else {
-                                        T::default()
-                                    },
+                                    + particle
+                                        .position
+                                        .grad_cubic(self.radius, fluid_particle.position)
+                                        * (particle.mass * particle.density.powi(-2)),
                             )
-                            * (if let Some(mass) = other_particle.mass {
-                                mass
-                            } else {
-                                particle.mass.unwrap()
-                            } * delta_t.powi(2));
+                            * fluid_particle.mass
+                            * delta_t.powi(2);
+                    }
+                }
+
+                if let Some(boundary_particles) =
+                    self.boundary_particle_map.get(&point.bin(self.radius))
+                {
+                    for boundary_particle in boundary_particles {
+                        diagonal[i] -= particle
+                            .position
+                            .grad_cubic(self.radius, boundary_particle.position)
+                            .dot(inverse_densities[i])
+                            * boundary_particle.mass(particle.rest_density())
+                            * delta_t.powi(2);
                     }
                 }
             }
@@ -250,23 +299,25 @@ where
             }
             for point in particle.position.along_axes(self.radius) {
                 if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
-                    for (_, other_particle) in particles {
+                    for (_, fluid_particle) in particles {
                         density_diff[i] -= particle
                             .position
-                            .grad_cubic(self.radius, other_particle.position)
-                            .dot(
-                                particle.velocity.unwrap()
-                                    - if let Some(velocity) = other_particle.velocity {
-                                        velocity
-                                    } else {
-                                        T::default()
-                                    },
-                            )
-                            * (if let Some(mass) = other_particle.mass {
-                                mass
-                            } else {
-                                particle.mass.unwrap()
-                            } * delta_t);
+                            .grad_cubic(self.radius, fluid_particle.position)
+                            .dot(particle.velocity - fluid_particle.velocity)
+                            * fluid_particle.mass
+                            * delta_t;
+                    }
+                }
+                if let Some(boundary_particles) =
+                    self.boundary_particle_map.get(&point.bin(self.radius))
+                {
+                    for boundary_particle in boundary_particles {
+                        density_diff[i] -= particle
+                            .position
+                            .grad_cubic(self.radius, boundary_particle.position)
+                            .dot(particle.velocity)
+                            * boundary_particle.mass(particle.rest_density())
+                            * delta_t;
                     }
                 }
             }
@@ -274,52 +325,36 @@ where
         density_diff
     }
 
-    pub fn get_pressure_accelerations(
-        &self,
-        pressures: [f64; NUM_PARTICLES],
-    ) -> [T; NUM_PARTICLES] {
+    pub fn get_pressure_accelerations(&self) -> [T; NUM_PARTICLES] {
         let mut accelerations: [T; NUM_PARTICLES] = [T::default(); NUM_PARTICLES];
         for (i, particle) in self.particles.iter().enumerate() {
-            if particle.density.unwrap() == 0. {
+            if particle.density == 0. {
                 continue;
             }
             for point in particle.position.along_axes(self.radius) {
                 if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
-                    for (j, other_particle) in particles {
-                        if other_particle.density.unwrap() < 0.000000001 {
+                    for (j, fluid_particle) in particles {
+                        if fluid_particle.density < 0.000000001 {
                             continue;
                         }
                         accelerations[i] += particle
                             .position
-                            .grad_cubic(self.radius, other_particle.position)
-                            * (-if let Some(mass) = other_particle.mass {
-                                mass
-                            } else {
-                                particle.mass.unwrap()
-                            } * (pressures[i] * particle.density.unwrap().powi(-2)
-                                + if let Some(density) = other_particle.density {
-                                    pressures[*j] * density.powi(-2)
-                                } else {
-                                    0.
-                                }));
-                        if i == TEST_NUM
-                            && checker
-                            && false
-                            && particle
-                                .position
-                                .grad_cubic(self.radius, other_particle.position)
-                                != T::default()
-                            && pressures[*j] != 0.
-                        {
-                            println!(
-                                "Bordering Pressure: {}, Position: {}, Index: {}, Density: {}",
-                                pressures[*j],
-                                other_particle.position,
-                                j,
-                                self.particles[*j].density.unwrap()
-                            );
-                            println!("{}", accelerations[i]);
-                        }
+                            .grad_cubic(self.radius, fluid_particle.position)
+                            * (-fluid_particle.mass
+                                * (self.pressures[i] * particle.density.powi(-2)
+                                    + self.pressures[*j] * fluid_particle.density.powi(-2)));
+                    }
+                }
+                if let Some(boundary_particles) =
+                    self.boundary_particle_map.get(&point.bin(self.radius))
+                {
+                    for boundary_particle in boundary_particles {
+                        accelerations[i] += particle
+                            .position
+                            .grad_cubic(self.radius, boundary_particle.position)
+                            * (-boundary_particle.mass(particle.rest_density())
+                                * self.pressures[i]
+                                * particle.density.powi(-2));
                     }
                 }
             }
@@ -329,10 +364,8 @@ where
     }
 
     pub fn update_pressure_velocity(&mut self, delta_t: f64) {
-        let num_iter: u64 = 15;
+        let num_iter: u64 = 50;
         let relaxation_coeff = 0.5;
-        let mut pressures: [f64; NUM_PARTICLES] = [0.; NUM_PARTICLES];
-
         let mut pressure_accelerations: [T; NUM_PARTICLES] = [T::default(); NUM_PARTICLES];
         let diagonal = self.get_diagonal(delta_t);
         let density_diff = self.get_density_differences(delta_t);
@@ -357,7 +390,7 @@ where
             .particles
             .iter()
             .enumerate()
-            .map(|(i, p)| (i, p.density.unwrap()))
+            .map(|(i, p)| (i, p.density))
             .collect();
         h.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         println!(
@@ -406,6 +439,7 @@ where
         );
 
         for j in 0..num_iter {
+            pressure_accelerations = self.get_pressure_accelerations();
             let mut image: [f64; NUM_PARTICLES] = [0.; NUM_PARTICLES];
             error = 0.;
             let mut count = 0;
@@ -415,10 +449,10 @@ where
                 }
                 for point in particle.position.along_axes(self.radius) {
                     if let Some(particles) = self.particle_map.get(&point.bin(self.radius)) {
-                        for (j, other_particle) in particles {
+                        for (j, fluid_particle) in particles {
                             image[i] += particle
                                 .position
-                                .grad_cubic(self.radius, other_particle.position)
+                                .grad_cubic(self.radius, fluid_particle.position)
                                 .dot(
                                     pressure_accelerations[i]
                                         - if *j < NUM_PARTICLES {
@@ -427,27 +461,37 @@ where
                                             T::default()
                                         },
                                 )
-                                * (if let Some(mass) = other_particle.mass {
-                                    mass
-                                } else {
-                                    particle.mass.unwrap()
-                                } * delta_t.powi(2));
+                                * fluid_particle.mass
+                                * delta_t.powi(2);
+                        }
+                    }
+
+                    if let Some(boundary_particles) =
+                        self.boundary_particle_map.get(&point.bin(self.radius))
+                    {
+                        for boundary_particle in boundary_particles {
+                            image[i] += particle
+                                .position
+                                .grad_cubic(self.radius, boundary_particle.position)
+                                .dot(pressure_accelerations[i])
+                                * boundary_particle.mass(particle.rest_density())
+                                * delta_t.powi(2);
                         }
                     }
                 }
-                if i == TEST_NUM && checker {
-                    println!(
-                        "Test Particles Velocity: {}",
-                        self.particles[TEST_NUM].velocity.unwrap()
-                    );
-                    println!(
-                        "Test Particles Pressure Acceleration: {}",
-                        pressure_accelerations[TEST_NUM]
-                    );
-                    println!("Test Particles Pressure : {}", pressures[TEST_NUM]);
-                }
+                // if i == TEST_NUM && CHECKER {
+                //     println!(
+                //         "Test Particles Velocity: {}",
+                //         self.particles[TEST_NUM].velocity
+                //     );
+                //     println!(
+                //         "Test Particles Pressure Acceleration: {}",
+                //         pressure_accelerations[TEST_NUM]
+                //     );
+                //     println!("Test Particles Pressure : {}", self.pressures[TEST_NUM]);
+                // }
 
-                pressures[i] += relaxation_coeff * (density_diff[i] - image[i]) / diagonal[i];
+                self.pressures[i] += relaxation_coeff * (density_diff[i] - image[i]) / diagonal[i];
                 if i == TEST_NUM {
                     println!(
                         "Density Difference: {}, Image: {}, Diagonal: {}",
@@ -463,57 +507,62 @@ where
                 //     assert!(1 == 0);
                 // }
 
-                if pressures[i] < 0. {
+                if self.pressures[i] < 0. {
                     count += 1;
                 }
 
                 // pressures[i] = (0.29845 - self.particles[i].position.height()) * 100.;
-                pressures[i] = pressures[i].max(0.);
+                self.pressures[i] = self.pressures[i].max(0.);
 
                 // if i == TEST_NUM {
                 //     println!("Pressure: {}", pressures[i]);
-                //     println!("Image: {}", image[i]);x
+                //     println!("Image: {}", image[i]);
                 //     println!("Height: {}", self.particles[i].position.height());
                 // }
-                if error_checker {
-                    if i == TEST_NUM {
-                        pressures[i] = 1.;
-                    } else {
-                        pressures[i] = 1.;
-                    }
-                }
+                // if ERROR_CHECKER {
+                //     if i == TEST_NUM {
+                //         self.pressures[i] = 1.;
+                //     } else {
+                //         self.pressures[i] = 1.;
+                //     }
+                // }
                 // if i != TEST_NUM {
                 //     pressures[i] = 0.;
                 // }
             }
-            println!("COUNT!: {}", count);
+
+            println!("TEST PRESSURE!: {}", self.pressures[TEST_NUM]);
+            println!(
+                "TEST PRESSURE ACCELERATIONS!: {}",
+                pressure_accelerations[TEST_NUM]
+            );
             // let max_pressure = pressures.iter().cloned().fold(0. / 0., f64::max);
             // for elem in &mut pressures {
             //     *elem /= max_pressure / 10.;
             // }
-            pressure_accelerations = self.get_pressure_accelerations(pressures);
+
             // println!(
             //     "New velocity: {:?}",
             //     pressure_accelerations[TEST_NUM] * delta_t
             // );
             for i in 0..image.len() {
-                error += (density_diff[i] - image[i]).abs() / self.particles[i].expected_density();
+                error += (density_diff[i] - image[i]).abs() / self.particles[i].rest_density();
             }
             let mut image_average = 0.;
             for i in 0..image.len() {
-                image_average += image[i].abs() / self.particles[i].expected_density();
+                image_average += image[i].abs() / self.particles[i].rest_density();
             }
-            if error_checker {
-                println!(
-                    "Density Differences: {:?}, {:?}, {:?}",
-                    image[TEST_NUM] + self.particles[TEST_NUM].density.unwrap(),
-                    pressures[TEST_NUM],
-                    image[TEST_NUM]
-                );
-            }
+            // if ERROR_CHECKER {
+            //     println!(
+            //         "Density Differences: {:?}, {:?}, {:?}",
+            //         image[TEST_NUM] + self.particles[TEST_NUM].density,
+            //         self.pressures[TEST_NUM],
+            //         image[TEST_NUM]
+            //     );
+            // }
 
             if j == 0 || j == num_iter - 1 || true {
-                println!("Error Percentage: {:?}, {}", error / image.len() as f64, j);
+                println!("ERROR Percentage: {:?}, {}", error / image.len() as f64, j);
             }
 
             // println!("Image Average: {:?}", image_average / image.len() as f64);
@@ -521,41 +570,52 @@ where
             // if j == 1 {
             //     break;
             // }
-            // let bob: Vec<(usize, &f64)> = pressures
-            //     .iter()
-            //     .enumerate()
-            //     .filter(|(i, &n)| n == 0.)
-            //     .take(10)
-            //     .collect();
-            // let bob2: Vec<T> = bob
-            //     .into_iter()
-            //     .map(|(i, h)| self.particles[i].position)
-            //     .collect();
-            // println!("{:?}", bob2);  break;
-            // }
         }
         println!(
             "count: {}, pressure average: {}",
-            pressures.len() - pressures.iter().filter(|&n| *n <= 0.).count(),
-            pressures.iter().fold(0., |a, b| a + b) / pressures.len() as f64
+            self.pressures.len() - self.pressures.iter().filter(|&n| *n <= 0.).count(),
+            self.pressures.iter().fold(0., |a, b| a + b) / self.pressures.len() as f64
         );
         self.particles = self
             .particles
             .iter()
             .enumerate()
             .map(|(i, particle)| {
-                particle
-                    .with_velocity(particle.velocity.unwrap() + pressure_accelerations[i] * delta_t)
+                particle.with_velocity(particle.velocity + pressure_accelerations[i] * delta_t)
             })
             .collect::<Vec<Particle<T>>>()
             .as_slice()
             .try_into()
             .expect("Expected a Vec of a different length");
-        println!("Velocity: {}", self.particles[TEST_NUM].velocity.unwrap());
+        println!("Velocity: {}", self.particles[TEST_NUM].velocity);
+        for pressure in self.pressures.iter_mut() {
+            *pressure *= 0.6;
+        }
     }
 
-    pub fn update(&mut self, delta_t: f64) {
+    pub fn to_file(&mut self, path: String) {
+        let mut data: String = "".to_owned();
+        for &particle in &self.particles {
+            data.push_str(&particle.position.to_string());
+            data.push_str(", ");
+        }
+        data = data[..data.len() - 1].to_owned();
+
+        fs::write(path, data).expect("Unable to write file");
+    }
+
+    pub fn update(&mut self, delta_t: f64) -> f64 {
         self.update_hashmap();
+
+        self.boundary_particles = self
+            .boundary_particles
+            .par_iter()
+            .enumerate()
+            .map(|(i, boundary_particle)| self.update_boundary_volume(i, boundary_particle))
+            .collect::<Vec<BoundaryParticle<T>>>()
+            .as_slice()
+            .try_into()
+            .expect("Expected a Vec of a different length");
 
         self.particles = self
             .particles
@@ -566,20 +626,34 @@ where
             .as_slice()
             .try_into()
             .expect("Expected a Vec of a different length");
+
         println!("Resultant density: {:?}", self.particles[TEST_NUM].density);
         println!("Particle position: {}", self.particles[TEST_NUM].position);
+
         self.update_hashmap();
 
         self.particles = self
             .particles
             .par_iter()
-            .map(|particle| self.update_nonpressure_velocity(particle, delta_t))
+            .enumerate()
+            .map(|(i, particle)| self.update_nonpressure_velocity(i, particle, delta_t))
             .collect::<Vec<Particle<T>>>()
             .as_slice()
             .try_into()
             .expect("Expected a Vec of a different length");
+
         self.update_hashmap();
+
         self.update_pressure_velocity(delta_t);
+
+        let total_temperature: f64 = self
+            .particles
+            .iter()
+            .map(|particle| particle.temperature)
+            .fold(0., |x: f64, y: f64| x.max(y));
+
+        println!("TOTAL TEMPERATURE: {}", total_temperature);
+
         self.particles = self
             .particles
             .iter()
@@ -588,13 +662,27 @@ where
             .as_slice()
             .try_into()
             .expect("Expected a Vec of a different length");
-        self.particles = self
+
+        let max_speed = self
             .particles
             .iter()
-            .map(|particle| particle.with_velocity(T::default()))
-            .collect::<Vec<Particle<T>>>()
-            .as_slice()
-            .try_into()
-            .expect("Expected a Vec of a different length");
+            .map(|&p| p.velocity.mag())
+            .fold(0., f64::max);
+
+        // let max_delta_t = -self.max_cfl * self.radius / self.gravity;
+        if max_speed > 0.5 {
+            self.cfl * self.radius / max_speed
+        } else {
+            (-self.cfl * self.radius / self.gravity).sqrt()
+        }
+
+        // self.particles = self
+        //     .particles
+        //     .iter()
+        //     .map(|particle| particle.with_velocity(T::default()))
+        //     .collect::<Vec<Particle<T>>>()
+        //     .as_slice()
+        //     .try_into()
+        //     .expect("Expected a Vec of a different length");
     }
 }
