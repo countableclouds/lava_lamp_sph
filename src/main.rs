@@ -8,6 +8,7 @@ use map::Map;
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use std::collections::HashSet;
+use std::f32::consts::PI;
 use std::fs;
 use std::str::FromStr;
 
@@ -15,12 +16,12 @@ use std::{convert::TryInto, time::Instant};
 
 use utility::{BoundaryParticle, Coords, Fluid, Particle, Point3D};
 
-use kiss3d::{camera::FirstPerson, light::Light, scene::SceneNode, window::Window};
+use kiss3d::{camera::ArcBall, light::Light, scene::SceneNode, window::Window};
 use na::Point3;
 
 const ROOM_TEMPERATURE: f64 = 293.15;
 const MAP_SCALE: f32 = 1500.;
-const LAYERS: usize = 6;
+const LAYERS: usize = 36;
 const DIM: Point3D = Point3D {
     x: 0.15,
     y: 0.15,
@@ -271,15 +272,15 @@ fn main() {
 
     window.set_background_color(1.0, 1.0, 1.0);
     let eye = (BOUNDARY_DIM * MAP_SCALE as f64 / 2.
-        + Point3D::new(-0.35 * MAP_SCALE as f64, 0., 0.))
+        + Point3D::new(-0.5 * MAP_SCALE as f64, 0., 0.))
     .na_point();
-    let mut first_person = FirstPerson::new(eye, (BOUNDARY_DIM * MAP_SCALE as f64 / 2.).na_point());
+    let mut arc_ball = ArcBall::new(eye, (DIM * MAP_SCALE as f64 / 2.).na_point());
 
     let mut cubes: Vec<SceneNode> = vec![];
-    first_person.set_move_step(10.);
-    let mut delta_t = 0.01; //(10. as f64).recip();
-
-    while window.render_with_camera(&mut first_person) {
+    let mut delta_t = 0.001; //(10. as f64).recip();
+    arc_ball.set_yaw(3. * PI / 2.);
+    arc_ball.set_pitch(0.0);
+    while window.render_with_camera(&mut arc_ball) {
         for cube in &mut cubes {
             window.remove_node(cube);
         }
@@ -312,10 +313,11 @@ fn main() {
 
             cube.append_translation(&(particle.position * MAP_SCALE as f64).translation())
         }
-
-        map.update(delta_t);
-        // delta_t = 0.026449456893745664;
-        println!("The change in time is: {}", delta_t);
+        delta_t = map.update(delta_t);
+        println!(
+            "The change in time is: {}. Total time elapsed: {}",
+            delta_t, time_elapsed
+        );
         i += 1;
         if i % 10 == 0 {
             println!(

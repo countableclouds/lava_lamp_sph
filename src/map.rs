@@ -212,11 +212,11 @@ where
         //     println!("{}", buoyancy);
         // }
 
-        // if water_benzyl_normal != T::default() {
-        //     acceleration += water_benzyl_normal.normalize()
-        //         * (Fluid::Saltwater.interfacial_tension(Fluid::BenzylAlcohol)
-        //             * water_benzyl_curvature);
-        // }
+        if water_benzyl_normal != T::default() {
+            acceleration += water_benzyl_normal.normalize()
+                * (Fluid::Saltwater.interfacial_tension(Fluid::BenzylAlcohol)
+                    * water_benzyl_curvature);
+        }
 
         acceleration =
             acceleration * particle.density.recip() + T::default().with_height(self.gravity);
@@ -493,12 +493,12 @@ where
                 self.pressures[i] +=
                     relaxation_coeff * (density_diff[i] - image[i]) / (diagonal[i]);
 
-                if i == TEST_NUM {
-                    println!(
-                        "Density Difference: {}, Image: {}, Diagonal: {}",
-                        density_diff[i], image[i], diagonal[i]
-                    );
-                }
+                // if i == TEST_NUM {
+                //     println!(
+                //         "Density Difference: {}, Image: {}, Diagonal: {}",
+                //         density_diff[i], image[i], diagonal[i]
+                //     );
+                // }
 
                 if self.pressures[i] < 0. {
                     count += 1;
@@ -524,11 +524,11 @@ where
                 // }
             }
 
-            println!("TEST PRESSURE!: {}", self.pressures[TEST_NUM]);
-            println!(
-                "TEST PRESSURE ACCELERATIONS!: {}",
-                pressure_accelerations[TEST_NUM]
-            );
+            // println!("TEST PRESSURE!: {}", self.pressures[TEST_NUM]);
+            // println!(
+            //     "TEST PRESSURE ACCELERATIONS!: {}",
+            //     pressure_accelerations[TEST_NUM]
+            // );
             // let max_pressure = pressures.iter().cloned().fold(0. / 0., f64::max);
             // for elem in &mut pressures {
             //     *elem /= max_pressure / 10.;
@@ -554,9 +554,9 @@ where
             //     );
             // }
 
-            if j == 0 || j == num_iter - 1 || true {
-                println!("ERROR Percentage: {:?}, {}", error / image.len() as f64, j);
-            }
+            // if j == 0 || j == num_iter - 1 || true {
+            //     println!("ERROR Percentage: {:?}, {}", error / image.len() as f64, j);
+            // }
 
             // println!("Image Average: {:?}", image_average / image.len() as f64);
 
@@ -660,6 +660,7 @@ where
             .iter()
             .map(|&p| p.velocity.mag())
             .fold(0., f64::max);
+
         // self.particles = self
         //     .particles
         //     .iter()
@@ -670,7 +671,7 @@ where
         //     .expect("Expected a Vec of a different length");
 
         // let max_delta_t = -self.max_cfl * self.radius / self.gravity;
-        if max_speed > 0.5 {
+        if max_speed > 0.3 {
             return self.cfl * self.radius / max_speed;
         } else {
             return (-self.cfl * self.radius / self.gravity).sqrt();
