@@ -481,22 +481,22 @@ impl Coords for Point3D {
         self.x = self.x + velocity.x * delta_t;
         self.y = self.y + velocity.y * delta_t;
         self.z = self.z + velocity.z * delta_t;
-        if self.x > dim.x - margin || self.x < margin {
-            self.x = self.x.min(dim.x - margin).max(margin);
-            velocity.x = 0.;
-        }
-        if self.y > dim.y - margin || self.y < margin {
-            self.y = self.y.min(dim.y - margin).max(margin);
-            velocity.y = 0.;
-        }
-        if self.z > dim.z - margin {
-            self.z = dim.z - margin;
-            velocity.z = 0.;
-        }
-        if self.z < margin {
-            self.z = margin;
-            velocity.z = 0.;
-        };
+        // if self.x > dim.x - margin || self.x < margin {
+        //     self.x = self.x.min(dim.x - margin).max(margin);
+        //     velocity.x = 0.;
+        // }
+        // if self.y > dim.y - margin || self.y < margin {
+        //     self.y = self.y.min(dim.y - margin).max(margin);
+        //     velocity.y = 0.;
+        // }
+        // if self.z > dim.z - margin {
+        //     self.z = dim.z - margin;
+        //     velocity.z = 0.;
+        // }
+        // if self.z < margin {
+        //     self.z = margin;
+        //     velocity.z = 0.;
+        // };
     }
     fn proj(&self) -> Vec<Self> {
         vec![

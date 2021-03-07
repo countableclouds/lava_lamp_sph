@@ -15,7 +15,7 @@ pub struct Map<T: Coords + Copy> {
     pub cfl: f64,
 }
 
-pub const TEST_NUM: usize = 8943; //2223; // ;
+pub const TEST_NUM: usize = 0; //2223; // ;
 pub const VOLUME_FACTOR: f64 = 1.;
 
 impl<T> Map<T>
@@ -212,11 +212,11 @@ where
         //     println!("{}", buoyancy);
         // }
 
-        if water_benzyl_normal != T::default() {
-            acceleration += water_benzyl_normal.normalize()
-                * (Fluid::Saltwater.interfacial_tension(Fluid::BenzylAlcohol)
-                    * water_benzyl_curvature);
-        }
+        // if water_benzyl_normal != T::default() {
+        //     acceleration += water_benzyl_normal.normalize()
+        //         * (Fluid::Saltwater.interfacial_tension(Fluid::BenzylAlcohol)
+        //             * water_benzyl_curvature);
+        // }
 
         acceleration =
             acceleration * particle.density.recip() + T::default().with_height(self.gravity);
@@ -437,7 +437,6 @@ where
             "Diagonal sum average: {:?}",
             diagonal.iter().map(|e| e).sum::<f64>() / density_diff.len() as f64
         );
-        self.pressures[0] = 1.;
         for j in 0..num_iter {
             pressure_accelerations = self.get_pressure_accelerations();
             let mut image: [f64; NUM_PARTICLES] = [0.; NUM_PARTICLES];
@@ -506,7 +505,7 @@ where
                 }
 
                 // pressures[i] = (0.29845 - self.particles[i].position.height()) * 100.;
-                self.pressures[i] = self.pressures[i].max(0.).min(1000.);
+                self.pressures[i] = self.pressures[i].max(0.);
 
                 // if i == TEST_NUM {
                 //     println!("Pressure: {}", pressures[i]);
@@ -661,6 +660,14 @@ where
             .iter()
             .map(|&p| p.velocity.mag())
             .fold(0., f64::max);
+        // self.particles = self
+        //     .particles
+        //     .iter()
+        //     .map(|particle| particle.with_velocity(T::default()))
+        //     .collect::<Vec<Particle<T>>>()
+        //     .as_slice()
+        //     .try_into()
+        //     .expect("Expected a Vec of a different length");
 
         // let max_delta_t = -self.max_cfl * self.radius / self.gravity;
         if max_speed > 0.5 {
@@ -668,14 +675,5 @@ where
         } else {
             return (-self.cfl * self.radius / self.gravity).sqrt();
         }
-
-        self.particles = self
-            .particles
-            .iter()
-            .map(|particle| particle.with_velocity(T::default()))
-            .collect::<Vec<Particle<T>>>()
-            .as_slice()
-            .try_into()
-            .expect("Expected a Vec of a different length");
     }
 }

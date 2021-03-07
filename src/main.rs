@@ -19,15 +19,30 @@ use kiss3d::{camera::FirstPerson, light::Light, scene::SceneNode, window::Window
 use na::Point3;
 
 const ROOM_TEMPERATURE: f64 = 293.15;
-const MAP_SCALE: f32 = 1440.;
-const NUM_PARTICLES: usize = 10115;
+const MAP_SCALE: f32 = 1500.;
+const LAYERS: usize = 6;
 const DIM: Point3D = Point3D {
     x: 0.15,
     y: 0.15,
-    z: 0.3,
+    z: 0.3 / 36. * LAYERS as f64,
 };
-const BOUNDARY_PARTICLES_DIM: [usize; 3] = [20, 20, 40];
-const NUM_BOUNDARY_PARTICLES: usize = 2626;
+const BOUNDARY_DIM: Point3D = Point3D {
+    x: DIM.x,
+    y: DIM.y,
+    z: DIM.z * 3. / 2.,
+};
+const PARTICLES_DIM: [usize; 3] = [19, 19, LAYERS + 2];
+const BOUNDARY_PARTICLES_DIM: [usize; 3] =
+    [PARTICLES_DIM[0], PARTICLES_DIM[1], PARTICLES_DIM[2] * 3 / 2];
+const NUM_PARTICLES: usize =
+    (PARTICLES_DIM[0] - 1) * (PARTICLES_DIM[1] - 1) * (PARTICLES_DIM[2] - 1);
+const NUM_BOUNDARY_PARTICLES: usize = (BOUNDARY_PARTICLES_DIM[0] + 1)
+    * (BOUNDARY_PARTICLES_DIM[1] + 1)
+    * (BOUNDARY_PARTICLES_DIM[2] + 1)
+    - (BOUNDARY_PARTICLES_DIM[0] - 1)
+        * (BOUNDARY_PARTICLES_DIM[1] - 1)
+        * (BOUNDARY_PARTICLES_DIM[2] - 1)
+    - (BOUNDARY_PARTICLES_DIM[0] - 1) * (BOUNDARY_PARTICLES_DIM[1] - 1);
 const WRITE_TO_FILE: bool = false;
 
 fn gen_points_random(
@@ -70,20 +85,32 @@ fn gen_boundary_points(
     boundary_points
 }
 
-fn disp_cube(window: &mut Window, vertices: [Point3<f32>; 8], color: Point3<f32>) {
-    window.draw_line(&vertices[0], &vertices[1], &color);
-    window.draw_line(&vertices[0], &vertices[2], &color);
-    window.draw_line(&vertices[0], &vertices[4], &color);
-    window.draw_line(&vertices[2], &vertices[3], &color);
-    window.draw_line(&vertices[4], &vertices[5], &color);
-    window.draw_line(&vertices[2], &vertices[6], &color);
-    window.draw_line(&vertices[1], &vertices[5], &color);
-    window.draw_line(&vertices[4], &vertices[6], &color);
-    window.draw_line(&vertices[1], &vertices[3], &color);
-    window.draw_line(&vertices[7], &vertices[3], &color);
-    window.draw_line(&vertices[7], &vertices[5], &color);
-    window.draw_line(&vertices[7], &vertices[6], &color);
+fn gen_fluid_points(
+    &start: &Point3D,
+    &width: &Point3D,
+    &length: &Point3D,
+    &height: &Point3D,
+    width_particles: usize,
+    length_particles: usize,
+    height_particles: usize,
+) -> Vec<Point3D> {
+    let mut fluid_points: Vec<Point3D> = Vec::new();
+    for k in 1..height_particles {
+        for i in 1..width_particles {
+            for j in 1..length_particles {
+                fluid_points.push(
+                    start
+                        + width * ((i as f64) / (width_particles as f64))
+                        + length * ((j as f64) / (length_particles as f64))
+                        + height * ((k as f64) / (height_particles as f64)),
+                );
+            }
+        }
+    }
+
+    fluid_points
 }
+
 fn main() {
     let mut rng = StdRng::seed_from_u64(2);
 
@@ -114,9 +141,18 @@ fn main() {
             z: f64::from_str(coord.next().unwrap()).unwrap(),
         });
     }
+    let points = gen_fluid_points(
+        &Point3D::default(),
+        &Point3D::default().with_x(DIM.x),
+        &Point3D::default().with_y(DIM.y),
+        &Point3D::default().with_z(DIM.z),
+        PARTICLES_DIM[0],
+        PARTICLES_DIM[1],
+        PARTICLES_DIM[2],
+    );
     // points.shuffle(&mut rng);
     let mut boundary_points = Vec::new();
-    for elem in DIM
+    for elem in BOUNDARY_DIM
         .proj()
         .iter()
         .zip(BOUNDARY_PARTICLES_DIM.iter())
@@ -124,25 +160,27 @@ fn main() {
     {
         //combinations(2) {
         boundary_points.append(&mut gen_boundary_points(
-            &Point3D::new(0., 0., 0.),
-            &(DIM - *elem[0].0),
-            &(DIM - *elem[1].0),
+            &Point3D::default(),
+            &(BOUNDARY_DIM - *elem[0].0),
+            &(BOUNDARY_DIM - *elem[1].0),
             *elem[0].1,
             *elem[1].1,
         ));
     }
 
-    for elem in DIM
+    for elem in BOUNDARY_DIM
         .proj()
         .iter()
         .zip(BOUNDARY_PARTICLES_DIM.iter())
         .combinations(2)
     {
-        //combinations(2) {
+        if elem[0].0.z != 0. && elem[1].0.z != 0. {
+            continue;
+        }
         boundary_points.append(&mut gen_boundary_points(
-            &DIM,
-            &(*elem[0].0 - DIM),
-            &(*elem[1].0 - DIM),
+            &BOUNDARY_DIM,
+            &(*elem[0].0 - BOUNDARY_DIM),
+            &(*elem[1].0 - BOUNDARY_DIM),
             *elem[0].1,
             *elem[1].1,
         ));
@@ -178,7 +216,9 @@ fn main() {
         })
         .unwrap();
     let mut window = Window::new("Simulation! 😎");
-    let particle_density = DIM.volume() / NUM_PARTICLES as f64;
+    // let particle_density = DIM.volume() / NUM_PARTICLES as f64;
+    let particle_density = DIM.volume()
+        / ((PARTICLES_DIM[0] + 1) * (PARTICLES_DIM[1] + 1) * (PARTICLES_DIM[2] + 1)) as f64;
     let particles: [Particle<Point3D>; NUM_PARTICLES] = points
         .into_iter()
         .enumerate()
@@ -216,7 +256,7 @@ fn main() {
         boundary_particles,
         particle_density.cbrt() * 2.,
         DIM,
-        0.,
+        -9.8,
         0.05,
     );
     println!("RADIUS: {:.8}", particle_density.cbrt() * 2.);
@@ -230,17 +270,10 @@ fn main() {
     window.set_light(Light::StickToCamera);
 
     window.set_background_color(1.0, 1.0, 1.0);
-    let eye = (DIM * MAP_SCALE as f64 / 2.
-        + Point3D::new(-0.35 * MAP_SCALE as f64, 0., -DIM.z * MAP_SCALE as f64 / 4.))
+    let eye = (BOUNDARY_DIM * MAP_SCALE as f64 / 2.
+        + Point3D::new(-0.35 * MAP_SCALE as f64, 0., 0.))
     .na_point();
-    let mut first_person = FirstPerson::new(
-        eye,
-        Point3::new(
-            DIM.x as f32 * MAP_SCALE / 2.,
-            DIM.y as f32 * MAP_SCALE / 2.,
-            DIM.z as f32 * MAP_SCALE / 4.,
-        ),
-    );
+    let mut first_person = FirstPerson::new(eye, (BOUNDARY_DIM * MAP_SCALE as f64 / 2.).na_point());
 
     let mut cubes: Vec<SceneNode> = vec![];
     first_person.set_move_step(10.);
@@ -251,7 +284,6 @@ fn main() {
             window.remove_node(cube);
         }
         cubes = vec![];
-        disp_cube(&mut window, vertices, Point3::new(0.0, 0.0, 0.0));
         for (j, particle) in (&map.particles).iter().enumerate() {
             cubes.push(window.add_cube(0.001 * MAP_SCALE, 0.001 * MAP_SCALE, 0.001 * MAP_SCALE));
 
