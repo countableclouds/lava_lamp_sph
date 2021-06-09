@@ -16,17 +16,19 @@ use std::{convert::TryInto, time::Instant};
 
 use utility::{BoundaryParticle, Coords, Fluid, Particle, Point3D};
 
+use kiss3d::event::{Action, Key};
 use kiss3d::{camera::ArcBall, light::Light, scene::SceneNode, window::Window};
 use na::Point3;
 
 const ROOM_TEMPERATURE: f64 = 293.15;
 const MAP_SCALE: f32 = 1500.;
-const LAYERS: usize = 36;
+const LAYERS: usize = 6;
 const DIM: Point3D = Point3D {
     x: 0.15,
     y: 0.15,
     z: 0.3 / 36. * LAYERS as f64,
 };
+
 const BOUNDARY_DIM: Point3D = Point3D {
     x: DIM.x,
     y: DIM.y,
@@ -272,7 +274,7 @@ fn main() {
 
     window.set_background_color(1.0, 1.0, 1.0);
     let eye = (BOUNDARY_DIM * MAP_SCALE as f64 / 2.
-        + Point3D::new(-0.5 * MAP_SCALE as f64, 0., 0.))
+        + Point3D::new(-0.25 * MAP_SCALE as f64, 0., 0.))
     .na_point();
     let mut arc_ball = ArcBall::new(eye, (DIM * MAP_SCALE as f64 / 2.).na_point());
 
@@ -280,10 +282,12 @@ fn main() {
     let mut delta_t = 0.001; //(10. as f64).recip();
     arc_ball.set_yaw(3. * PI / 2.);
     arc_ball.set_pitch(0.0);
+    let mut paused: bool = false;
     while window.render_with_camera(&mut arc_ball) {
         for cube in &mut cubes {
             window.remove_node(cube);
         }
+
         cubes = vec![];
         for (j, particle) in (&map.particles).iter().enumerate() {
             cubes.push(window.add_cube(0.001 * MAP_SCALE, 0.001 * MAP_SCALE, 0.001 * MAP_SCALE));
@@ -312,6 +316,15 @@ fn main() {
             cube.set_color(1., 0., 0.);
 
             cube.append_translation(&(particle.position * MAP_SCALE as f64).translation())
+        }
+        if window.get_key(Key::P) == Action::Press {
+            paused = true;
+        }
+        if window.get_key(Key::L) == Action::Press {
+            paused = false;
+        }
+        if paused {
+            continue;
         }
         delta_t = map.update(delta_t);
         println!(

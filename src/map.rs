@@ -15,7 +15,7 @@ pub struct Map<T: Coords + Copy> {
     pub cfl: f64,
 }
 
-pub const TEST_NUM: usize = 0; //2223; // ;
+pub const TEST_NUM: usize = 323; //2223; // ;
 pub const VOLUME_FACTOR: f64 = 1.;
 
 impl<T> Map<T>
@@ -525,10 +525,7 @@ where
             }
 
             // println!("TEST PRESSURE!: {}", self.pressures[TEST_NUM]);
-            // println!(
-            //     "TEST PRESSURE ACCELERATIONS!: {}",
-            //     pressure_accelerations[TEST_NUM]
-            // );
+
             // let max_pressure = pressures.iter().cloned().fold(0. / 0., f64::max);
             // for elem in &mut pressures {
             //     *elem /= max_pressure / 10.;
@@ -563,7 +560,12 @@ where
             // if j == 1 {
             //     break;
             // }
+            // println!(
+            //     "TEST PRESSURE ACCELERATIONS!: {}, position: {}",
+            //     pressure_accelerations[TEST_NUM], self.particles[TEST_NUM].position
+            // );
         }
+
         println!(
             "count: {}, pressure average: {}",
             self.pressures.len() - self.pressures.iter().filter(|&n| *n <= 0.).count(),
@@ -660,6 +662,12 @@ where
             .iter()
             .map(|&p| p.velocity.mag())
             .fold(0., f64::max);
+        let height = self
+            .particles
+            .iter()
+            .map(|&p| p.position.height())
+            .fold(0., f64::max);
+        println!("MAX HEIGHT: {}", height);
 
         // self.particles = self
         //     .particles
